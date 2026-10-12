@@ -1,0 +1,99 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: sprintweave-ui
+  namespace: sprintweave
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: apps.openshift.io/v1
+kind: DeploymentConfig
+metadata:
+  name: sprintweave-ui
+  namespace: sprintweave
+spec:
+  replicas: 1
+  selector:
+    app: sprintweave-ui
+  template:
+    metadata:
+      labels:
+        app: sprintweave-ui
+    spec:
+      containers:
+        - name: ui
+          image: image-registry.openshift-image-registry.svc:5000/sprintweave/sprintweave-ui:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: HOME
+              value: /opt/app-root/src
+            - name: SPRINTWEAVE_API_URL
+              value: "http://sprintweave-api:8000"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+  triggers:
+    - type: ConfigChange
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames: ["ui"]
+        from:
+          kind: ImageStreamTag
+          name: sprintweave-ui:latest
+          namespace: sprintweave
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprintweave-ui
+  namespace: sprintweave
+spec:
+  selector:
+    app: sprintweave-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: sprintweave-ui
+  namespace: sprintweave
+spec:
+  to:
+    kind: Service
+    name: sprintweave-ui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

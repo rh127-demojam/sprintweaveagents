@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sprintweave-data
+  namespace: sprintweave
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sprintweave-config
+  namespace: sprintweave
+data:
+  LLM_PROVIDER: "openai"
+  LLM_BASE_URL: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
+  LLM_MODEL: "claude-opus-4-6"
+  LLM_MAX_TOKENS: "2048"
+  LLM_TIMEOUT: "180"
+---
+apiVersion: apps.openshift.io/v1
+kind: DeploymentConfig
+metadata:
+  name: sprintweave-api
+  namespace: sprintweave
+spec:
+  replicas: 1
+  selector:
+    app: sprintweave-api
+  template:
+    metadata:
+      labels:
+        app: sprintweave-api
+    spec:
+      containers:
+        - name: api
+          image: image-registry.openshift-image-registry.svc:5000/sprintweave/sprintweave-ui:latest
+          imagePullPolicy: Always
+          command:
+            - uvicorn
+            - api.main:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: HOME
+              value: /opt/app-root/src
+            - name: SPRINTWEAVE_DATA_DIR
+              value: /data
+            - name: SPRINTWEAVE_AGENTS_DIR
+              value: /opt/app-root/src/sprintweave-agents
+            - name: SPRINTWEAVE_PROMPTS
+              value: /opt/app-root/src/sprintweave-web/prompts
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sprintweave-llm
+                  key: LLM_API_KEY
+          envFrom:
+            - configMapRef:
+                name: sprintweave-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sprintweave-data
+  triggers:
+    - type: ConfigChange
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames: ["api"]
+        from:
+          kind: ImageStreamTag
+          name: sprintweave-ui:latest
+          namespace: sprintweave
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprintweave-api
+  namespace: sprintweave
+spec:
+  selector:
+    app: sprintweave-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

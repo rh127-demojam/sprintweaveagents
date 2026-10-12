@@ -1,0 +1,12 @@
+# Thin app deps — install on every app image rebuild (fast).
+fastapi>=0.115.0
+uvicorn>=0.32.0
+python-multipart>=0.0.12
+streamlit>=1.36.0
+requests>=2.32.0
+pypdf>=5.0.0
+openpyxl>=3.1.0
+# Optional LangGraph tool-agent (SPRINTWEAVE_USE_LANGGRAPH=true)
+langgraph>=0.2.0
+langchain-openai>=0.2.0
+langchain-core>=0.3.0

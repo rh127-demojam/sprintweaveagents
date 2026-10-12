@@ -1,0 +1,80 @@
+# Thin app image — rebuild often (minutes if Docling base already exists).
+#
+# Build from CFP_NEW (parent of sprintweave-web + agent trees):
+#
+#   # 1) Once (or when Docling version changes):
+#   podman build -f sprintweave-web/Dockerfile.docling-base \
+#     -t quay.io/YOUR_ORG/sprintweave-docling-base:latest .
+#   podman push quay.io/YOUR_ORG/sprintweave-docling-base:latest
+#
+#   # 2) Every code/agents change:
+#   podman build -f sprintweave-web/Dockerfile.bundle \
+#     --build-arg BASE_IMAGE=quay.io/YOUR_ORG/sprintweave-docling-base:latest \
+#     --build-arg AGENTS_SRC=cpat-main \
+#     --build-arg PIPELINES=lab-requirements,rhoso \
+#     -t quay.io/YOUR_ORG/sprintweave-rhoso:latest .
+#
+# Optional pipeline filter: --build-arg PIPELINES=lab-requirements,rhoso
+# Without Docling base (not recommended): BASE_IMAGE=python:3.12-slim and install
+# requirements-docling.txt yourself.
+
+ARG BASE_IMAGE=quay.io/rh_global_services_auto/sprintweave-docling-base:latest
+FROM ${BASE_IMAGE}
+
+ARG AGENTS_SRC=sprintweave-agents
+ARG PIPELINES=all
+
+USER root
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/app \
+    PYTHONPATH=/app \
+    STREAMLIT_SERVER_PORT=8080 \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
+    STREAMLIT_SERVER_HEADLESS=true \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    SPRINTWEAVE_DATA_DIR=/data \
+    SPRINTWEAVE_PROMPTS=/app/sprintweave-web/prompts \
+    SPRINTWEAVE_AGENTS_DIR=/app/sprintweave-agents \
+    SPRINTWEAVE_PIPELINES=${PIPELINES} \
+    SPRINTWEAVE_USE_DOCLING=true \
+    PIP_TRUSTED_HOST="pypi.org pypi.python.org files.pythonhosted.org" \
+    HF_HOME=/opt/docling-cache \
+    TRANSFORMERS_CACHE=/opt/docling-cache \
+    DOCLING_CACHE_DIR=/opt/docling-cache
+
+# Ensure appuser exists when BASE_IMAGE is plain python:3.12-slim
+RUN if ! id appuser >/dev/null 2>&1; then \
+      groupadd -g 1001 appuser && useradd -m -u 1001 -g 1001 -s /bin/bash appuser; \
+    fi \
+    && mkdir -p /app /data/jobs /opt/docling-cache /tmp/docling-cache \
+    && chmod -R a+rwx /opt/docling-cache /tmp/docling-cache \
+    && chown -R appuser:appuser /app /data /opt/docling-cache \
+    && (chmod -R a+rX /usr/local/lib/python*/site-packages/rapidocr 2>/dev/null || true) \
+    && (chown -R appuser:appuser /usr/local/lib/python*/site-packages/rapidocr 2>/dev/null || true)
+
+WORKDIR /app
+
+COPY sprintweave-web/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir \
+    --trusted-host pypi.org \
+    --trusted-host pypi.python.org \
+    --trusted-host files.pythonhosted.org \
+    -r /tmp/requirements.txt
+
+COPY sprintweave-web/ ./sprintweave-web/
+COPY ${AGENTS_SRC}/ ./sprintweave-agents/
+# Overlay Cursor skills from full sprintweave-agents tree (RHOSO/cpat-main often lacks them)
+COPY sprintweave-agents/.cursor/skills/ ./sprintweave-agents/.cursor/skills/
+
+RUN chown -R appuser:appuser /app /data
+
+USER 1001
+
+WORKDIR /app/sprintweave-web
+ENV PYTHONPATH=/app/sprintweave-web:/app
+
+EXPOSE 8080 8000
+
+CMD ["streamlit", "run", "ui/app.py", "--server.port=8080", "--server.address=0.0.0.0", "--server.headless=true"]

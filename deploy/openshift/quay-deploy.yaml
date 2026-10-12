@@ -1,0 +1,224 @@
+# Image: quay.io/YOUR_ORG/sprintweave:latest (workspace sprintweave-agents)
+#   oc new-project sprintweave
+#   3. oc create secret docker-registry quay-pull ...
+#   4. oc secrets link default quay-pull --for=pull
+#   5. oc apply -f this file (after replacing the image name)
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sprintweave-data
+  namespace: sprintweave
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sprintweave-config
+  namespace: sprintweave
+data:
+  LLM_PROVIDER: "openai"
+  LLM_BASE_URL: "https://maas-rhdp.apps.maas.redhatworkshops.io/v1"
+  LLM_MODEL: "claude-opus-4-6"
+  LLM_MAX_TOKENS: "8192"
+  LLM_TIMEOUT: "600"
+  SPRINTWEAVE_USE_DOCLING: "true"
+  SPRINTWEAVE_DOCLING_OCR: "false"
+  SPRINTWEAVE_DOCLING_TABLES: "false"
+  SPRINTWEAVE_DOCLING_MD_CACHE: "true"
+  SPRINTWEAVE_REQUIRE_PARSED: "true"
+  HF_HOME: "/opt/docling-cache"
+  DOCLING_CACHE_DIR: "/opt/docling-cache"
+  HUGGINGFACE_HUB_CACHE: "/opt/docling-cache/hub"
+  SPRINTWEAVE_AGENT_MAX_STEPS: "40"
+  SPRINTWEAVE_AGENT_PYTHON_TIMEOUT: "300"
+  SPRINTWEAVE_AGENT_COMPACT: "true"
+  SPRINTWEAVE_AGENT_COMPACT_KEEP_TURNS: "3"
+  SPRINTWEAVE_AGENT_TOOL_RESULT_MAX: "8000"
+  SPRINTWEAVE_AGENT_PYTHON_INLINE: "false"
+  SPRINTWEAVE_AGENT_FORCE_WRITE_AFTER_STEP: "3"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sprintweave-api
+  namespace: sprintweave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sprintweave-api
+  template:
+    metadata:
+      labels:
+        app: sprintweave-api
+    spec:
+      containers:
+        - name: api
+          image: quay.io/YOUR_ORG/sprintweave:latest
+          imagePullPolicy: Always
+          workingDir: /app/sprintweave-web
+          command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: HOME
+              value: /app
+            - name: PYTHONPATH
+              value: /app/sprintweave-web:/app
+            - name: SPRINTWEAVE_DATA_DIR
+              value: /data
+            - name: SPRINTWEAVE_AGENTS_DIR
+              value: /app/sprintweave-agents
+            - name: SPRINTWEAVE_PROMPTS
+              value: /app/sprintweave-web/prompts
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sprintweave-llm
+                  key: LLM_API_KEY
+          envFrom:
+            - configMapRef:
+                name: sprintweave-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: docling-cache
+              mountPath: /opt/docling-cache
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sprintweave-data
+        - name: docling-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprintweave-api
+  namespace: sprintweave
+spec:
+  selector:
+    app: sprintweave-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sprintweave-ui
+  namespace: sprintweave
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sprintweave-ui
+  template:
+    metadata:
+      labels:
+        app: sprintweave-ui
+    spec:
+      containers:
+        - name: ui
+          image: quay.io/YOUR_ORG/sprintweave:latest
+          imagePullPolicy: Always
+          workingDir: /app/sprintweave-web
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: HOME
+              value: /app
+            - name: SPRINTWEAVE_API_URL
+              value: "http://sprintweave-api:8000"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sprintweave-ui
+  namespace: sprintweave
+spec:
+  selector:
+    app: sprintweave-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: sprintweave-ui
+  namespace: sprintweave
+spec:
+  to:
+    kind: Service
+    name: sprintweave-ui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
