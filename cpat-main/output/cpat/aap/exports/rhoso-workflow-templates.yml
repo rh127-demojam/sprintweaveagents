@@ -1,0 +1,115 @@
+# ---------------------------------------------------------------------------
+# CPAT RHOSO Workflow Templates for AAP 2.5
+# Owner: RHOSO Deployment Engineer (RDE-5)
+# Import: awx-manage import < rhoso-workflow-templates.yml
+# ---------------------------------------------------------------------------
+---
+workflow_job_templates:
+
+  # =========================================================================
+  # RHOSO Full Install
+  # =========================================================================
+  - name: "CPAT RHOSO Full Install"
+    description: >-
+      End-to-end RHOSO installation: manifest generation -> prerequisites ->
+      operators -> secrets -> storage -> control plane -> network -> data plane ->
+      validation -> observability
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "RHOSO Full Install Parameters"
+      description: "Cluster parameters for all workflow nodes"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ciq_file_path"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Name"
+          variable: "cluster_name"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "RHOSO Version"
+          variable: "rhoso_version"
+          type: "multiplechoice"
+          required: true
+          default: "18.0"
+          choices: ["18.0"]
+    workflow_nodes:
+      - identifier: manifest_generation
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "manifests/manifest_generation", rhoso_apply_manifests: false, rhoso_skip_generation: false }
+        success_nodes: [{ identifier: prerequisites }]
+      - identifier: prerequisites
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "prerequisites/prerequisites", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: verify_crds }]
+      - identifier: verify_crds
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "common/_verify_required_crds", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: prereq_operators }]
+      - identifier: prereq_operators
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "prerequisites/prerequisite_operator_installation", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: disconnected_prep }]
+      - identifier: disconnected_prep
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "prerequisites/disconnected_environment_preparation", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: osp_secret }]
+      - identifier: osp_secret
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "secrets/generate_osp_secret", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: dp_secrets }]
+      - identifier: dp_secrets
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "secrets/generate_data_plane_secrets", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: ceph_secret }]
+      - identifier: ceph_secret
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "secrets/generate_ceph_secret", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: persistent_storage }]
+      - identifier: persistent_storage
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "storage/persistent_storage_configuration", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: trident_storage }]
+      - identifier: trident_storage
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "storage/trident_storage_configuration", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: storage_crs }]
+      - identifier: storage_crs
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "storage/_generate_storage_crs", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: openstack_operator }]
+      - identifier: openstack_operator
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "control_plane/openstack_operator_installation_and_preparation", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: rhocp_prep }]
+      - identifier: rhocp_prep
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "control_plane/rhocp_preparation_for_rhoso", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: control_plane_deploy }]
+      - identifier: control_plane_deploy
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "control_plane/control_plane_deployment_and_verification", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: control_plane_custom }]
+      - identifier: control_plane_custom
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "control_plane/control_plane_customization", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: network_prep }]
+      - identifier: network_prep
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "network/network_preparation", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: data_plane_deploy }]
+      - identifier: data_plane_deploy
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "data_plane/data_plane_deployment_and_verification", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: post_validation }]
+      - identifier: post_validation
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "post_deployment/post_deployment_validation", rhoso_apply_manifests: true, rhoso_skip_generation: true }
+        success_nodes: [{ identifier: observability }]
+      - identifier: observability
+        unified_job_template: { name: "CPAT RHOSO Install", type: job_template }
+        extra_data: { installation_task: "post_deployment/observability_configuration", rhoso_apply_manifests: true, rhoso_skip_generation: true }

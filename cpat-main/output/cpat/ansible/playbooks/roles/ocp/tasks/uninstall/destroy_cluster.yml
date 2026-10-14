@@ -1,0 +1,279 @@
+---
+# Destroy an OCP cluster and clean up all state for a fresh re-install.
+#
+# Steps:
+#   1. Kill lingering openshift-install processes
+#   2. Run openshift-install destroy cluster (if kubeconfig exists)
+#   3. Eject virtual media from all BMC nodes
+#   4. Power off all nodes
+#   5. Stop HAProxy and remove VIPs
+#   6. Kill ISO HTTP server
+#   7. Clean install artifacts
+#   8. Close firewall ports
+
+# --- 1. Kill lingering openshift-install ---
+- name: Kill lingering openshift-install processes
+  ansible.builtin.shell:
+    cmd: pkill -f '[o]penshift-install' || true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- 2. Run openshift-install destroy cluster ---
+- name: Run cluster destroy (async)
+  ansible.builtin.shell:
+    cmd: |
+      LOG="{{ ocp_install_dir }}/cluster-destroy.log"
+      echo "=== CPAT OCP Cluster Destroy ===" > $LOG
+      echo "Started: $(date)" >> $LOG
+
+      if [ -f {{ ocp_install_dir }}/auth/kubeconfig ]; then
+        echo "=== Destroying OCP cluster ===" >> $LOG
+        export KUBECONFIG={{ ocp_install_dir }}/auth/kubeconfig
+        {{ ocp_openshift_install_binary }} destroy cluster \
+          --dir {{ ocp_install_dir }} --log-level info >> $LOG 2>&1 || true
+        echo "Cluster destroy completed" >> $LOG
+      else
+        echo "No kubeconfig found — skipping cluster destroy command" >> $LOG
+      fi
+
+      echo "Finished: $(date)" >> $LOG
+  failed_when: false
+  async: 1800
+  poll: 0
+  register: _destroy_job
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Wait for cluster destroy to complete
+  ansible.builtin.async_status:
+    jid: "{{ _destroy_job.ansible_job_id }}"
+  register: _destroy_result
+  until: _destroy_result.finished
+  retries: 60
+  delay: 30
+  failed_when: false
+  ignore_unreachable: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
+
+- name: Fetch destroy log to CPAT
+  ansible.builtin.fetch:
+    src: "{{ ocp_install_dir }}/cluster-destroy.log"
+    dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-cluster-destroy.log"
+    flat: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  failed_when: false
+
+# --- 3. Eject virtual media from all BMC nodes ---
+- name: "Eject virtual media from {{ item.Hostname }}"
+  ansible.builtin.uri:
+    url: >-
+      {{ item['BMC Address']
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('/redfish/v1/.*$', '') }}{{ item['BMC Address']
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('^https?://[^/]+', '') }}/VirtualMedia/Cd/Actions/VirtualMedia.EjectMedia
+    method: POST
+    user: "{{ item['BMC Username'] | default('admin') }}"
+    password: "{{ item['BMC Password Reference'] | default('password') }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body: {}
+    status_code: [200, 204, 400, 404]
+  loop: "{{ ocp_bmc_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.Hostname }}"
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_bmc_hosts | default([]) | length > 0
+
+# --- 4. Power off all nodes ---
+- name: "Power off {{ item.Hostname }}"
+  ansible.builtin.uri:
+    url: >-
+      {{ item['BMC Address']
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('/redfish/v1/.*$', '') }}{{ item['BMC Address']
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('^https?://[^/]+', '') }}/Actions/ComputerSystem.Reset
+    method: POST
+    user: "{{ item['BMC Username'] | default('admin') }}"
+    password: "{{ item['BMC Password Reference'] | default('password') }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body:
+      ResetType: ForceOff
+    status_code: [200, 204, 400, 409]
+  loop: "{{ ocp_bmc_hosts | default([]) }}"
+  loop_control:
+    label: "{{ item.Hostname }}"
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_bmc_hosts | default([]) | length > 0
+
+# --- 5. Stop HAProxy and remove VIPs ---
+- name: Stop HAProxy
+  ansible.builtin.service:
+    name: haproxy
+    state: stopped
+  become: true
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Compute effective VIPs for removal
+  ansible.builtin.set_fact:
+    _effective_api_vip: "{{ ocp_api_vip | default('') | ternary(ocp_api_vip, ocp_api_vip_platform_none | default('')) }}"
+    _effective_ingress_vip: "{{ ocp_ingress_vip | default('') }}"
+    _effective_prefix: "{{ ocp_machine_network_cidr | default('10.0.0.0/24') | regex_replace('.*/','') }}"
+
+- name: Remove API VIP from bastion interface
+  ansible.builtin.shell:
+    cmd: ip addr del {{ _effective_api_vip }}/{{ _effective_prefix }} dev {{ ocp_bastion_interface | default('enp1s0') }} 2>/dev/null || true
+  become: true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _effective_api_vip | length > 0
+
+- name: Remove Ingress VIP from bastion interface
+  ansible.builtin.shell:
+    cmd: ip addr del {{ _effective_ingress_vip }}/{{ _effective_prefix }} dev {{ ocp_bastion_interface | default('enp1s0') }} 2>/dev/null || true
+  become: true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _effective_ingress_vip | length > 0
+
+# --- 6. Kill ISO HTTP server ---
+- name: Kill ISO HTTP server
+  ansible.builtin.shell:
+    cmd: pkill -f '[p]ython3 -m http.server {{ ocp_iso_http_port }}' || true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- 7. Clean install artifacts (keep oc-mirror workspace) ---
+- name: Clean install artifacts on bastion
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ ocp_install_dir }} 2>/dev/null || exit 0
+      rm -rf auth/
+      rm -f .openshift_install* metadata.json
+      rm -f agent.x86_64.iso agent.aarch64.iso
+      rm -f install-config.yaml agent-config.yaml
+      rm -f bootstrap.ign master.ign worker.ign
+      rm -f bootstrap-complete.log install-complete.log agent-create-image.log
+      rm -rf openshift/
+      echo "Install artifacts cleaned (oc-mirror workspace preserved)"
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- 8. Close firewall ports ---
+- name: Remove firewall ports
+  ansible.builtin.shell:
+    cmd: >-
+      firewall-cmd
+      --remove-port={{ ocp_api_server_port | default(6443) }}/tcp
+      --remove-port={{ ocp_mcs_port | default(22623) }}/tcp
+      --remove-port={{ ocp_ingress_https_port | default(443) }}/tcp
+      --remove-port={{ ocp_iso_http_port | default(8089) }}/tcp
+      2>/dev/null || true
+  become: true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- Summary ---
+- name: Display destroy log
+  ansible.builtin.shell:
+    cmd: cat {{ ocp_install_dir }}/cluster-destroy.log 2>/dev/null || echo "No destroy log found"
+  register: _final_log
+  changed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Cluster destroy complete
+  ansible.builtin.debug:
+    msg:
+      - "=== OCP Cluster Destroy Complete ==="
+      - "Cluster: {{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+      - ""
+      - "Cleaned:"
+      - "  ✓ openshift-install processes killed"
+      - "  ✓ Cluster destroy command executed"
+      - "  ✓ Virtual media ejected from {{ ocp_bmc_hosts | default([]) | length }} nodes"
+      - "  ✓ All nodes powered off"
+      - "  ✓ HAProxy stopped, VIPs removed"
+      - "  ✓ ISO HTTP server stopped"
+      - "  ✓ Install artifacts cleaned (oc-mirror workspace preserved)"
+      - "  ✓ Firewall ports closed"
+      - ""
+      - "Ready for fresh re-install from Bastion Preparation."

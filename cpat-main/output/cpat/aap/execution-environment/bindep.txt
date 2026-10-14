@@ -1,0 +1,7 @@
+# System packages for CPAT EE
+# These are installed via dnf in the ee-minimal-rhel9 base image
+python3-devel [platform:redhat]
+jq [platform:redhat]
+tar [platform:redhat]
+curl [platform:redhat]
+openssh-clients [platform:redhat]

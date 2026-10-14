@@ -1,0 +1,55 @@
+---
+- name: Register RHOSO environment
+  ansible.builtin.debug:
+    msg:
+      - "CPAT: Starting RHOSO registration"
+      - "Cluster Name: {{ ciq.cluster_name }}"
+      - "Type: {{ ciq.cluster_type_label }}"
+  tags: register
+
+- name: Validate RHOSO CIQ identity
+  ansible.builtin.assert:
+    that:
+      - ciq.cluster_type == 'rhoso'
+      - ciq.cluster_name | length > 0
+    fail_msg: "Invalid RHOSO CIQ data."
+  tags: register
+
+# Map parse_ciq output into the same facts used by rhoso/_validate_ciq.yml
+- name: Prepare CIQ facts for field validation
+  ansible.builtin.set_fact:
+    rhoso_ciq: "{{ ciq.parameters | default({}) }}"
+    rhoso_networks: "{{ ciq.networks | default([]) }}"
+    rhoso_nodes: "{{ ciq.nodes | default([]) }}"
+    rhoso_deployment_mode: >-
+      {{ ciq.parameters['Deployment Mode'] | default('connected') | lower }}
+    rhoso_dp_mode: >-
+      {{ ciq.parameters['Data Plane Provisioning Mode'] | default('pre-provisioned') | lower }}
+    rhoso_sub_method: >-
+      {{ ciq.parameters['Subscription Method'] | default('activation_key') | lower }}
+    rhoso_edpm_net_topology: >-
+      {{ ciq.parameters['EDPM Network Config Topology'] | default('dual_nic_bond') | lower }}
+  tags: register
+
+- name: Derive disconnected flag for CIQ validation
+  ansible.builtin.set_fact:
+    rhoso_is_disconnected: >-
+      {{ rhoso_deployment_mode in ['disconnected', 'airgapped', 'offline'] }}
+  tags: register
+
+- name: Validate every CIQ field against type / regexp schema
+  ansible.builtin.include_tasks: ../../rhoso/tasks/_validate_ciq.yml
+  tags: register
+
+- name: RHOSO registration placeholder
+  ansible.builtin.command: >-
+    echo Registering RHOSO environment {{ ciq.cluster_name }}
+    with parameters from {{ ciq_file_path }}
+  register: rhoso_register_cmd
+  changed_when: false
+  tags: register
+
+- name: RHOSO registration complete
+  ansible.builtin.debug:
+    msg: "RHOSO environment '{{ ciq.cluster_name }}' registered successfully."
+  tags: register

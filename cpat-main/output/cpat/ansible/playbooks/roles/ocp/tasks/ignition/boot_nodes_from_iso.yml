@@ -1,0 +1,154 @@
+---
+# Boot all cluster nodes from the agent ISO via BMC Redfish Virtual Media.
+#
+# Flow:
+#   1. Verify ISO exists on bastion
+#   2. Start temporary HTTP server on bastion to serve the ISO
+#   3. For each BMC host: eject → insert ISO → set boot to Cd → power on
+#
+# Uses ansible.builtin.uri for all Redfish API calls.
+
+- name: Set ISO architecture name
+  ansible.builtin.set_fact:
+    _iso_arch: "{{ 'x86_64' if ocp_architecture == 'amd64' else ('aarch64' if ocp_architecture == 'arm64' else ocp_architecture) }}"
+
+- name: Verify agent ISO exists on bastion
+  ansible.builtin.stat:
+    path: "{{ ocp_install_dir }}/agent.{{ _iso_arch }}.iso"
+  register: _iso_check
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Fail if agent ISO not found
+  ansible.builtin.fail:
+    msg: "Agent ISO not found at {{ ocp_install_dir }}/agent.{{ _iso_arch }}.iso — run 'Create Agent ISO' first"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+    - not (_iso_check.stat.exists | default(false))
+
+- name: Fail if no BMC hosts defined
+  ansible.builtin.fail:
+    msg: "No BMC hosts defined in CIQ (ocp_bmc_hosts is empty). Cannot boot nodes."
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+    - ocp_bmc_hosts | default([]) | length == 0
+
+- name: Kill any existing ISO HTTP server on bastion
+  ansible.builtin.shell:
+    cmd: pkill -f '[p]ython3 -m http.server {{ ocp_iso_http_port }}' || true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Open ISO HTTP port on bastion firewall
+  ansible.builtin.shell:
+    cmd: firewall-cmd --add-port={{ ocp_iso_http_port }}/tcp 2>/dev/null || true
+  changed_when: false
+  failed_when: false
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Start HTTP file server on bastion to serve agent ISO
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ ocp_install_dir }}
+      nohup python3 -m http.server {{ ocp_iso_http_port }} --bind 0.0.0.0 \
+        > /tmp/cpat-iso-http-server.log 2>&1 &
+      echo $!
+  register: _http_server
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Wait for HTTP server to become ready
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default('localhost') }}:{{ ocp_iso_http_port }}/"
+    method: GET
+    status_code: 200
+    timeout: 5
+  retries: 5
+  delay: 3
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Set ISO URL fact
+  ansible.builtin.set_fact:
+    _iso_url: "http://{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default('localhost') }}:{{ ocp_iso_http_port }}/agent.{{ _iso_arch }}.iso"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Display ISO URL
+  ansible.builtin.debug:
+    msg:
+      - "ISO HTTP server running on bastion:{{ ocp_iso_http_port }}"
+      - "ISO URL: {{ _iso_url }}"
+      - "Booting {{ ocp_bmc_hosts | length }} nodes..."
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+# --- Boot each node using URI-based Redfish calls ---
+- name: "Boot node {{ item.Hostname }} from agent ISO"
+  ansible.builtin.include_tasks: ignition/_boot_single_node.yml
+  vars:
+    _bmc_host: "{{ item }}"
+  loop: "{{ ocp_bmc_hosts }}"
+  loop_control:
+    label: "{{ item.Hostname }}"
+    pause: 5
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: All nodes booting from agent ISO
+  ansible.builtin.debug:
+    msg:
+      - "All {{ ocp_bmc_hosts | length }} nodes have been booted from agent ISO."
+      - "ISO served via HTTP at bastion:{{ ocp_iso_http_port }}"
+      - ""
+      - "Virtual media will be auto-ejected during Bootstrap Cluster once all nodes"
+      - "complete disk-write (detected from bootstrap-complete.log)."
+      - ""
+      - "Next step: Run 'OCP Bootstrap Cluster'."
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool

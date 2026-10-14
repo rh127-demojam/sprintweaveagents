@@ -1,0 +1,49 @@
+---
+# Verify Operator-installed CRDs required before generating/applying CRs.
+# Expects: rhoso_crd_check_list (list of {name, kind, purpose})
+
+- name: CRD check — reset missing list
+  ansible.builtin.set_fact:
+    rhoso_missing_crds: []
+
+- name: CRD check — list required definitions
+  ansible.builtin.debug:
+    msg: >-
+      Checking CRD {{ item.name }} (kind={{ item.kind }}) — {{ item.purpose }}
+  loop: "{{ rhoso_crd_check_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: CRD check — query each CRD on cluster
+  ansible.builtin.command:
+    cmd: oc get crd {{ item.name }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_crd_results
+  changed_when: false
+  failed_when: false
+  loop: "{{ rhoso_crd_check_list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: CRD check — collect missing CRDs
+  ansible.builtin.set_fact:
+    rhoso_missing_crds: >-
+      {{
+        rhoso_missing_crds | default([])
+        + ([item.item.name] if (item.rc | default(1)) != 0 else [])
+      }}
+  loop: "{{ rhoso_crd_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  when: rhoso_can_apply | bool
+
+- name: CRD check — assert all required CRDs are installed
+  ansible.builtin.assert:
+    that:
+      - (rhoso_missing_crds | default([])) | length == 0
+    fail_msg: >-
+      Missing CRD(s): {{ rhoso_missing_crds | default([]) | join(', ') }}.
+      Install OpenStack Operator / NMState / MetalLB / Multus prerequisites first.
+  when: rhoso_can_apply | bool

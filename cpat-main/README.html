@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CPAT — README</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1a1a2e; --muted: #555; --border: #d0d7de;
+           --accent: #0969da; --code-bg: #f6f8fa; --table-stripe: #f6f8fa;
+           --hr: #d0d7de; --heading: #1a1a2e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d1117; --fg: #c9d1d9; --muted: #8b949e; --border: #30363d;
+             --accent: #58a6ff; --code-bg: #161b22; --table-stripe: #161b22;
+             --hr: #30363d; --heading: #e6edf3; }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+          line-height: 1.6; color: var(--fg); background: var(--bg);
+          max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+  h1 { font-size: 2em; border-bottom: 1px solid var(--hr); padding-bottom: 8px;
+        margin: 24px 0 16px; color: var(--heading); }
+  h2 { font-size: 1.5em; border-bottom: 1px solid var(--hr); padding-bottom: 6px;
+        margin: 28px 0 14px; color: var(--heading); }
+  h3 { font-size: 1.25em; margin: 20px 0 10px; color: var(--heading); }
+  h4 { font-size: 1.05em; margin: 16px 0 8px; color: var(--heading); }
+  p { margin: 0 0 12px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--hr); margin: 28px 0; }
+  code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+          font-size: 0.88em; background: var(--code-bg); padding: 2px 6px;
+          border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 16px; border-radius: 6px;
+         overflow-x: auto; margin: 0 0 16px; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 0 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+  th { background: var(--code-bg); font-weight: 600; }
+  tr:nth-child(even) { background: var(--table-stripe); }
+  blockquote { border-left: 4px solid var(--accent); padding: 4px 16px;
+                color: var(--muted); margin: 0 0 16px; }
+  ul, ol { padding-left: 24px; margin: 0 0 12px; }
+  li { margin: 4px 0; }
+  strong { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1 id="cpat-cloud-platform-automation-tool">CPAT - Cloud Platform Automation Tool</h1>
+<p>Web-based application for automated registration and deployment of <strong>RHOSO</strong>
+(Red Hat OpenStack Services on OpenShift) on an existing RHOCP cluster.</p>
+<p>Built and maintained by <strong>SprintWeave</strong> AI agents that analyze RHOSO
+documentation, generate CIQ input files, and scaffold the complete CPAT
+application source code.</p>
+<p><strong>Version:</strong> tag/API <code>YY.M.W</code> (e.g. <code>26.7.4</code>); UI displays <code>vYY.M.W</code> (e.g. <code>v26.7.4</code>)</p>
+<p>For product scope, installation task details, CIQ parameters, and playbook
+examples, see <strong><a href="output/cpat/USAGE.md">USAGE.md</a></strong>.</p>
+<hr />
+<h2 id="directory-structure">Directory Structure</h2>
+<pre><code>cpat/
+├── input/                              # Agent inputs (reference docs &amp; project artifacts)
+│   ├── rhoso/
+│   │   ├── docs/                       # RHOSO PDF documentation
+│   │   └── project-artifacts/          # Per-project deployment artifacts
+│   │       ├── jio/                    #   JIO cluster manifests
+│   │       └── core42/                 #   Core42 HLD documents
+│   └── ocp/
+│       ├── docs/                       # OCP installation guides (4.17–4.20)
+│       └── project-artifacts/
+│
+├── output/                             # Agent outputs &amp; CPAT application
+│   ├── cpat/                           # CPAT application source code
+│   │   ├── ansible/                    #   Playbooks, roles, 15 Jinja templates
+│   │   ├── backend/                    #   Flask API (Python)
+│   │   ├── frontend/                   #   React UI (Vite)
+│   │   ├── docker/                     #   Container entrypoint
+│   │   ├── Dockerfile
+│   │   ├── bringup.sh
+│   │   └── USAGE.md
+│   ├── ciq-workbooks/                  # Generated CIQ Excel workbooks
+│   │   ├── rhoso/                      #   sample-rhoso.ciq.xlsx, rhoso-ciq-template.xlsx
+│   │   └── ocp/                        #   sample-ocp.ciq.xlsx, ocp-ciq-template.xlsx
+│   ├── ciq-generators/                 # Python scripts that generate CIQ workbooks
+│   ├── lab-requirements/               # Lab requirement workbooks
+│   └── deployment-tasks/               # Deployment task Excel briefs
+│
+├── project-management/                 # JIRA epics, CSV imports, tracking spreadsheets
+│
+├── .cursor/rules/                      # SprintWeave agent definitions
+│   ├── agent-orchestrator.md           #   Pipeline coordinator
+│   ├── agent-rhoso-da.md               #   RHOSO Design Architect
+│   └── agent-rhoso-deployment-engineer.md  # RHOSO Deployment Engineer
+│
+├── context/                            # Runtime configuration
+│   ├── pipelines.yaml                  #   Custom pipeline definitions
+│   ├── team-config.yaml                #   Team, gates, quality settings
+│   └── glossary-cloud.yaml             #   Domain terminology (100+ terms)
+│
+├── tools/                              # Built-in pipeline defaults &amp; dashboard
+│   ├── pipelines-default.yaml          #   Canonical pipeline definitions
+│   └── cpat-dashboard.canvas.tsx       #   Interactive Cursor canvas dashboard
+│
+└── README.md
+</code></pre>
+<hr />
+<h2 id="sprintweave-agents">SprintWeave Agents</h2>
+<p>Three AI agents collaborate to design, generate, and deploy RHOSO automation
+artifacts. Agent definitions live under <code>.cursor/rules/</code> and activate
+automatically based on user prompts.</p>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>Rule File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Orchestrator</strong></td>
+<td><code>agent-orchestrator.md</code></td>
+<td>Pipeline coordinator — sequences agents, enforces gates, reports progress. Never generates artifacts directly.</td>
+</tr>
+<tr>
+<td><strong>RHOSO DA</strong> (Design Architect)</td>
+<td><code>agent-rhoso-da.md</code></td>
+<td>Analyzes RHOSO documentation and project artifacts to produce CIQ workbooks, schema code, lab requirements, EDPM topology guides, and PDF gap matrices.</td>
+</tr>
+<tr>
+<td><strong>RHOSO Deployment Engineer</strong></td>
+<td><code>agent-rhoso-deployment-engineer.md</code></td>
+<td>Scaffolds or enhances CPAT source code (Ansible roles, Flask backend, React frontend, Docker), generates manifest catalogs, workflow MoPs, and deployment task briefs.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="agent-input-output-summary">Agent Input / Output Summary</h3>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>Reads From</th>
+<th>Writes To</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RHOSO DA</td>
+<td><code>input/rhoso/docs/</code>, <code>input/rhoso/project-artifacts/</code>, <code>input/ocp/docs/</code></td>
+<td><code>output/ciq-workbooks/</code>, <code>output/ciq-generators/</code>, <code>output/lab-requirements/</code></td>
+</tr>
+<tr>
+<td>RHOSO Deployment Engineer</td>
+<td>CIQ schema, RHOSO PDFs, existing CPAT codebase</td>
+<td><code>output/cpat/</code> (Ansible, backend, frontend, Docker), <code>output/deployment-tasks/</code></td>
+</tr>
+<tr>
+<td>Orchestrator</td>
+<td><code>context/pipelines.yaml</code>, <code>tools/pipelines-default.yaml</code>, <code>context/team-config.yaml</code></td>
+<td>Progress reports and gate checkpoints (no files)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="pipelines">Pipelines</h2>
+<p>Pipelines chain agents into ordered stages. Definitions are stored in two
+files that the Orchestrator merges at runtime:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tools/pipelines-default.yaml</code></td>
+<td>Built-in pipeline definitions (canonical)</td>
+</tr>
+<tr>
+<td><code>context/pipelines.yaml</code></td>
+<td>Team customizations, promoted pipelines, deletions</td>
+</tr>
+</tbody>
+</table>
+<h3 id="available-pipelines">Available Pipelines</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Pipeline</th>
+<th>Stages</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>RHOSO Delivery</strong></td>
+<td>RDA → RDE</td>
+<td><code>Run RHOSO delivery pipeline on @cpat</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>RHOSO Design Architect</strong></td>
+<td>RDA</td>
+<td><code>Run RHOSO DA pipeline on @cpat</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>RHOSO Deployment Engineer</strong></td>
+<td>RDE</td>
+<td><code>Run RHOSO DE pipeline on @cpat</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="pipeline-details">Pipeline Details</h3>
+<p><strong>1. RHOSO Delivery</strong> (full end-to-end)</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Agent</th>
+<th>Input</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RDA</td>
+<td>RHOSO DA</td>
+<td>RHOSO PDFs, project artifacts, OCP docs</td>
+<td>CIQ Parameter Reference (13 tables, 152+ params), EDPM Topology Guide, Registration Inputs, PDF Gap Matrix, CIQ Schema Code, CIQ Workbooks</td>
+</tr>
+<tr>
+<td>RDE</td>
+<td>RHOSO Deployment Engineer</td>
+<td>CIQ schema, RHOSO docs, prior RDA output</td>
+<td>CPAT Workflow MoP, Manifest Catalog (15 templates), Deploy Tasks, Cluster Commands, CPAT Project Scaffold (Ansible + Backend + Frontend + Docker)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>2. RHOSO Design Architect</strong> (RDA only)</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Agent</th>
+<th>Input</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RDA</td>
+<td>RHOSO DA</td>
+<td>RHOSO PDFs, project YAML manifests / HLD docs</td>
+<td>CIQ Parameter Reference, EDPM Topology Guide, Registration Inputs, PDF Gap Matrix, CIQ Schema Code, CIQ Workbooks, Project-Specific CIQ</td>
+</tr>
+</tbody>
+</table>
+<p><strong>3. RHOSO Deployment Engineer</strong> (RDE only)</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Agent</th>
+<th>Input</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RDE</td>
+<td>RHOSO Deployment Engineer</td>
+<td>CIQ schema, existing CPAT codebase</td>
+<td>CPAT Workflow MoP, Manifest Catalog (15 templates, ~100 defaults), Deploy Tasks, Cluster Commands, CPAT Scaffold, ZIP download</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-to-trigger-a-pipeline">How to Trigger a Pipeline</h3>
+<p>Pipelines are triggered by typing the pipeline command in the Cursor chat, or
+by clicking <strong>Launch</strong> on the
+<a href="tools/cpat-dashboard.canvas.tsx">CPAT Dashboard</a> canvas.</p>
+<pre><code>Run RHOSO delivery pipeline on @cpat
+</code></pre>
+<p>The Orchestrator agent activates, resolves the matching pipeline, announces
+the execution plan, and runs each stage sequentially.</p>
+<h4 id="pipeline-management-commands">Pipeline Management Commands</h4>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Manage pipelines</code></td>
+<td>List all pipelines with status</td>
+</tr>
+<tr>
+<td><code>Create pipeline</code></td>
+<td>Guided custom pipeline creation</td>
+</tr>
+<tr>
+<td><code>Edit pipeline [name]</code></td>
+<td>Modify an existing pipeline</td>
+</tr>
+<tr>
+<td><code>Restore default pipelines</code></td>
+<td>Reset <code>context/pipelines.yaml</code> to defaults</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="gates-quality-checkpoints">Gates (Quality Checkpoints)</h2>
+<p>Gates are configurable pause points between pipeline stages. When enabled,
+the Orchestrator stops after each agent completes and waits for user approval
+before proceeding.</p>
+<p>Gate configuration lives in <code>context/team-config.yaml</code>:</p>
+<pre><code class="language-yaml">gates:
+  enabled: true
+  mode: pause-approve
+  apply_to: pipeline          # pipeline | all
+  checklist:
+    require_source_traceability: true
+    require_pii_clean: true
+    require_no_unverified: true
+    require_min_items: true
+  skip_agents: []
+</code></pre>
+<h3 id="gate-behavior">Gate Behavior</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled: true</code></td>
+<td>Gates are active for pipelines</td>
+</tr>
+<tr>
+<td><code>enabled: false</code></td>
+<td>All stages run without pausing</td>
+</tr>
+<tr>
+<td><code>apply_to: pipeline</code></td>
+<td>Gates apply only during pipeline execution</td>
+</tr>
+<tr>
+<td><code>apply_to: all</code></td>
+<td>Gates apply to every agent invocation</td>
+</tr>
+</tbody>
+</table>
+<h3 id="gate-responses">Gate Responses</h3>
+<p>At each checkpoint the user can respond with:</p>
+<table>
+<thead>
+<tr>
+<th>Response</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>approve</code> / <code>next</code> / <code>continue</code></td>
+<td>Proceed to the next stage</td>
+</tr>
+<tr>
+<td><code>approve all</code></td>
+<td>Disable gates for remaining stages</td>
+</tr>
+<tr>
+<td><code>skip</code></td>
+<td>Skip current gate (marked as "skipped")</td>
+</tr>
+<tr>
+<td><code>reject: [reason]</code></td>
+<td>Re-run the agent with the feedback</td>
+</tr>
+</tbody>
+</table>
+<h3 id="overriding-gates-in-prompts">Overriding Gates in Prompts</h3>
+<ul>
+<li>Add <strong>"with gates"</strong> or <strong>"with checklist"</strong> to force gates ON</li>
+<li>Add <strong>"no gates"</strong> to force gates OFF</li>
+</ul>
+<pre><code>Run RHOSO delivery pipeline on @cpat with gates
+Run RHOSO DA pipeline on @cpat no gates
+</code></pre>
+<hr />
+<h2 id="ciq-schema-coverage">CIQ Schema Coverage</h2>
+<p>The RHOSO CIQ schema v1.2.0 defines <strong>13 tables</strong> with <strong>152+ parameters</strong>
+that drive all manifest generation:</p>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Params</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rhoso_details</code></td>
+<td>10</td>
+<td>Cluster identity, versions, deployment mode</td>
+</tr>
+<tr>
+<td><code>rhoso_access</code></td>
+<td>3</td>
+<td>Kubeconfig, API URL, pull secret</td>
+</tr>
+<tr>
+<td><code>rhoso_disconnected</code></td>
+<td>16</td>
+<td>Mirror registry, IDMS/ITMS, CatalogSource</td>
+</tr>
+<tr>
+<td><code>rhoso_storage</code></td>
+<td>2</td>
+<td>Storage class, backend type</td>
+</tr>
+<tr>
+<td><code>rhoso_control_plane</code></td>
+<td>27</td>
+<td>VIPs, operator config, DNS, TLS</td>
+</tr>
+<tr>
+<td><code>rhoso_edpm_network_config</code></td>
+<td>24</td>
+<td>Bridge, bond, DPDK, NTP, tuning</td>
+</tr>
+<tr>
+<td><code>rhoso_data_plane</code></td>
+<td>14</td>
+<td>SSH, secrets, subscription</td>
+</tr>
+<tr>
+<td><code>rhoso_services</code></td>
+<td>35</td>
+<td>Per-service enable flags, replicas</td>
+</tr>
+<tr>
+<td><code>rhoso_pv_sizing</code></td>
+<td>10</td>
+<td>Galera, OVN, telemetry storage</td>
+</tr>
+<tr>
+<td><code>rhoso_cinder_backend</code></td>
+<td>8</td>
+<td>NetApp driver, protocol, vserver</td>
+</tr>
+<tr>
+<td><code>rhoso_neutron_config</code></td>
+<td>4</td>
+<td>MTU, OVN emit-need-to-frag</td>
+</tr>
+<tr>
+<td><code>rhoso_networks</code></td>
+<td>16 cols</td>
+<td>CIDR, VLAN, MetalLB ranges (row table)</td>
+</tr>
+<tr>
+<td><code>rhoso_data_plane_nodes</code></td>
+<td>16 cols</td>
+<td>BMC, boot mode, NIC MACs (row table)</td>
+</tr>
+</tbody>
+</table>
+<p>CIQ workbook templates: <strong><a href="output/ciq-workbooks/rhoso/">output/ciq-workbooks/rhoso/</a></strong></p>
+<hr />
+<h2 id="manifest-templates-15">Manifest Templates (15)</h2>
+<p>CPAT generates every RHOSO deployment CR via CIQ-driven Jinja templates:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Template</th>
+<th>CR Kind</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>openstack_nncp.yaml.j2</code></td>
+<td>NodeNetworkConfigurationPolicy</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>openstack_nad.yaml.j2</code></td>
+<td>NetworkAttachmentDefinition</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>openstack_metallb.yaml.j2</code></td>
+<td>IPAddressPool + L2Advertisement</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>openstack_netconfig.yaml.j2</code></td>
+<td>NetConfig</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>openstack_control_plane.yaml.j2</code></td>
+<td>OpenStackControlPlane</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>edpm_network_config_template.j2</code></td>
+<td>EDPM NIC config (os-net-config)</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>openstack_dataplane_nodeset.yaml.j2</code></td>
+<td>OpenStackDataPlaneNodeSet</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>openstack_dataplane_deployment.yaml.j2</code></td>
+<td>OpenStackDataPlaneDeployment</td>
+<td>Always</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>openstack_baremetalhosts.yaml.j2</code></td>
+<td>BareMetalHost + BMC Secrets</td>
+<td>Unprovisioned</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>openstack_nmstate_secrets.yaml.j2</code></td>
+<td>NMState provisioning Secrets</td>
+<td>Unprovisioned</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>openstack_nova_cpu_pinning_cm.yaml.j2</code></td>
+<td>Nova CPU pinning ConfigMap</td>
+<td>CPU Dedicated Set</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>catalog_source.yaml.j2</code></td>
+<td>CatalogSource</td>
+<td>Disconnected</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>image_digest_mirror_set.yaml.j2</code></td>
+<td>ImageDigestMirrorSet</td>
+<td>Disconnected</td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>image_tag_mirror_set.yaml.j2</code></td>
+<td>ImageTagMirrorSet</td>
+<td>Disconnected</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>operatorhub_disable_defaults.yaml.j2</code></td>
+<td>OperatorHub patch</td>
+<td>Disconnected</td>
+</tr>
+</tbody>
+</table>
+<p>Templates are located at <code>output/cpat/ansible/playbooks/roles/rhoso/templates/</code>.</p>
+<hr />
+<h2 id="rhoso-install-workflow-cpat-ui">RHOSO Install Workflow (CPAT UI)</h2>
+<ol>
+<li><strong>Generate Manifests for Review</strong> — render YAML from CIQ into
+   <code>artifacts/&lt;cluster&gt;/</code> (no <code>oc apply</code>).</li>
+<li><strong>Review</strong> — view or download manifests in the RHOSO Installation page.
+   Download All (ZIP) packages all manifests into <code>&lt;cluster&gt;-manifests.zip</code>.</li>
+<li><strong>Deploy</strong> — select tasks; template-based tasks apply the reviewed files by
+   default. Optional <strong>Re-render templates before apply</strong> regenerates then applies.</li>
+</ol>
+<p>API: <code>POST /api/rhoso-installations/run</code> with <code>execution_mode</code> =
+<code>generate</code> | <code>deploy</code> | <code>full</code>, and optional <code>re_render_manifests</code>.</p>
+<hr />
+<h2 id="running-cpat">Running CPAT</h2>
+<h3 id="using-the-bring-up-script">Using the bring-up script</h3>
+<p>From the <code>output/cpat/</code> directory:</p>
+<pre><code class="language-bash">chmod +x bringup.sh
+./bringup.sh
+</code></pre>
+<p>Other commands:</p>
+<pre><code class="language-bash">./bringup.sh --build     # build image only (also prunes intermediate images)
+./bringup.sh --restart   # stop, rebuild, and start
+./bringup.sh --stop      # stop and remove container
+./bringup.sh --help      # show all options
+</code></pre>
+<p>Open <a href="http://localhost">http://localhost</a></p>
+<h3 id="local-development-without-containers">Local Development (without containers)</h3>
+<p><strong>Backend:</strong></p>
+<pre><code class="language-bash">cd output/cpat/backend
+python -m venv venv
+venv\Scripts\activate        # Windows
+pip install -r requirements.txt
+python app.py
+</code></pre>
+<p><strong>Frontend:</strong></p>
+<pre><code class="language-bash">cd output/cpat/frontend
+npm install
+npm run dev
+</code></pre>
+<p>Open <a href="http://localhost:5173">http://localhost:5173</a></p>
+<h3 id="default-credentials">Default Credentials</h3>
+<table>
+<thead>
+<tr>
+<th>Username</th>
+<th>Password</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>admin</td>
+<td>admin</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="versioning-yymw">Versioning (YY.M.W)</h2>
+<p>CPAT uses calendar versioning <strong><code>YY.M.W</code></strong> for image tags, env, and API:</p>
+<table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>YY</code></td>
+<td>Two-digit year</td>
+</tr>
+<tr>
+<td><code>M</code></td>
+<td>Month without leading zero for 1–9</td>
+</tr>
+<tr>
+<td><code>W</code></td>
+<td>Week of the month (<code>1</code>–<code>5</code>): days 1–7 → <code>1</code>, 8–14 → <code>2</code>, etc.</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Backend: <code>output/cpat/backend/version.py</code></li>
+<li>Override: set environment variable <code>CPAT_VERSION</code></li>
+</ul>
+<hr />
+<h2 id="data-storage">Data Storage</h2>
+<p>All runtime state is stored outside the CPAT application source at
+<code>output/cpat/data/</code> (created dynamically by <code>paths.py</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Content</th>
+<th>Local path</th>
+<th>Container path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SQLite DB</td>
+<td><code>data/cpat.db</code></td>
+<td><code>/cpat-data/cpat.db</code></td>
+</tr>
+<tr>
+<td>CIQ uploads</td>
+<td><code>data/uploads/</code></td>
+<td><code>/cpat-data/uploads/</code></td>
+</tr>
+<tr>
+<td>Input secrets</td>
+<td><code>data/secrets/&lt;cluster-id&gt;/</code></td>
+<td><code>/cpat-data/secrets/&lt;cluster-id&gt;/</code></td>
+</tr>
+<tr>
+<td>Registration logs</td>
+<td><code>data/logs/registrations/</code></td>
+<td><code>/cpat-data/logs/registrations/</code></td>
+</tr>
+<tr>
+<td>Installation logs</td>
+<td><code>data/logs/installations/</code></td>
+<td><code>/cpat-data/logs/installations/</code></td>
+</tr>
+<tr>
+<td>Generated manifests</td>
+<td><code>data/artifacts/&lt;cluster&gt;/</code></td>
+<td><code>/cpat-data/artifacts/&lt;cluster&gt;/</code></td>
+</tr>
+</tbody>
+</table>
+<p>Data is ephemeral — lost when the container is removed. <code>bringup.sh</code> does
+<strong>not</strong> mount a host volume.</p>
+</body>
+</html>

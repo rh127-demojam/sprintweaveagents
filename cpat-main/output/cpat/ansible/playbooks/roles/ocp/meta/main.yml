@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: ocp
+  author: CPAT / ODE
+  description: OpenShift Container Platform installation and configuration
+  license: Apache-2.0
+  min_ansible_version: "2.14"
+  platforms:
+    - name: RHEL
+      versions:
+        - "9"
+  galaxy_tags:
+    - openshift
+    - ocp
+    - kubernetes
+    - baremetal
+dependencies: []

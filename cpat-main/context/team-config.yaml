@@ -1,0 +1,73 @@
+# CPAT Team Configuration (RHOSO-focused)
+# Agents read this automatically. No rule files need to change.
+
+team:
+  name: "CPAT RHOSO Team"
+  domain: cloud
+  size: 4
+
+framework: scrum
+
+estimation:
+  scale: fibonacci
+  sprint_length_weeks: 2
+  velocity_sp: 40
+
+priority:
+  scheme: high-med-low
+
+personas:
+  - Deployment Engineer
+  - Platform Engineer
+  - System Administrator
+  - Network Engineer
+  - Operations Engineer
+
+stakeholders:
+  - Product Owner
+  - Engineering Manager
+  - Scrum Master
+
+tech_stack:
+  - Red Hat OpenStack Services on OpenShift (RHOSO)
+  - Red Hat OpenShift Container Platform (RHOCP)
+  - Ansible
+  - Python / Flask
+  - React / Vite
+  - Jinja2
+  - Podman / Docker
+  - Kubernetes / OpenShift Operators
+  - MetalLB
+  - OVN / OVS
+
+infrastructure:
+  monitoring_stack: "Prometheus/Grafana"
+  cloud_provider: "on-premise"
+
+compliance:
+  framework: "internal-policy"
+  change_approval: "team-lead"
+
+documentation:
+  default_audience: "administrators"
+
+quality:
+  max_story_points: 8
+  min_acceptance_criteria: 2
+  require_source_citation: true
+
+gates:
+  enabled: true
+  mode: pause-approve
+  apply_to: pipeline
+  checklist:
+    require_source_traceability: true
+    require_pii_clean: true
+    require_no_unverified: true
+    require_min_items: true
+  skip_agents: []
+
+output:
+  default_format: markdown
+  include_estimation: true
+  include_epic_grouping: true

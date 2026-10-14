@@ -1,0 +1,42 @@
+{% for node in rhoso_nodes %}
+{% if (node['BMC Address'] | default('') | string) | length > 0 %}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ node['Node Name'] }}-bmc-secret
+  namespace: {{ node['BMH Namespace'] | default(rhoso_openstack_ns) }}
+type: Opaque
+data:
+  username: {{ '{{ bmc_username_b64 }}' }}
+  password: {{ '{{ bmc_password_b64 }}' }}
+---
+apiVersion: metal3.io/v1alpha1
+kind: BareMetalHost
+metadata:
+  name: {{ node['Node Name'] }}
+  namespace: {{ node['BMH Namespace'] | default(rhoso_openstack_ns) }}
+  labels:
+    app: openstack
+    workload: {{ node['Role'] | default('compute') }}
+    nodeset: {{ rhoso_nodeset_name }}
+spec:
+  online: false
+  bootMACAddress: {{ node['Boot MAC Address'] }}
+{% if (node['Boot Mode'] | default('') | string) | length > 0 %}
+  bootMode: {{ node['Boot Mode'] }}
+{% endif %}
+  bmc:
+    address: {{ node['BMC Address'] }}
+    credentialsName: {{ node['Node Name'] }}-bmc-secret
+    disableCertificateVerification: true
+  preprovisioningNetworkDataName: {{ node['Node Name'] }}-nmstate-secret
+{% if (node['Root Device Hint'] | default('') | string) | length > 0 %}
+  rootDeviceHints:
+    deviceName: {{ node['Root Device Hint'] }}
+{% endif %}
+{% endif %}
+{% else %}
+# No BareMetalHost rows: set BMC Address + Boot MAC Address on rhoso_data_plane_nodes
+# when Data Plane Provisioning Mode=unprovisioned
+{% endfor %}

@@ -1,0 +1,261 @@
+---
+# RHOSO role defaults (RHOSO 18.0 Deploying / Customizing / Storage / Disconnected docs)
+rhoso_apply_manifests: true
+# When true, skip Jinja/template generation and apply existing files under rhoso_manifest_dir
+# (engineer-reviewed artifacts). Used by the UI "Deploy using reviewed manifests" flow.
+rhoso_skip_generation: false
+# Validate every CIQ parameter / network / node field against Python regexp schema
+rhoso_validate_ciq: true
+rhoso_wait_timeout: 60m
+rhoso_manifest_dir: "/cpat-data/artifacts/{{ cluster_name | default('rhoso') }}"
+# Backend always overrides rhoso_manifest_dir via extra_vars (POSIX under CPAT_DATA_DIR).
+# Hard-coded default avoids Git-Bash MSYS rewriting of /cpat-data via env lookup.
+rhoso_control_plane_name: openstack-control-plane
+rhoso_nodeset_name: openstack-data-plane
+rhoso_deployment_name: data-plane-deploy
+rhoso_osp_secret_name: osp-secret
+rhoso_ansible_ssh_secret_name: dataplane-ansible-ssh-private-key-secret
+rhoso_nova_migration_secret_name: nova-migration-ssh-key
+rhoso_subscription_secret_name: subscription-manager
+rhoso_libvirt_secret_name: libvirt-secret
+rhoso_operator_channel: stable-v1.0
+rhoso_operator_source: redhat-operators
+
+# Prerequisite Operator defaults (NMState, MetalLB, Cert-Manager)
+rhoso_prereq_operator_source: redhat-operators
+rhoso_prereq_operator_source_ns: openshift-marketplace
+rhoso_prereq_install_plan_approval: Automatic
+
+rhoso_nmstate_namespace: openshift-nmstate
+rhoso_nmstate_channel: stable
+
+rhoso_metallb_namespace: metallb-system
+rhoso_metallb_channel: stable
+
+rhoso_certmanager_namespace: cert-manager-operator
+rhoso_certmanager_channel: stable-v1
+
+# EDPM network_config defaults (overridden by CIQ)
+rhoso_physical_bridge_name: br-ex
+rhoso_edpm_net_topology: dual_nic_bond
+rhoso_edpm_bridge_type: ovs_bridge
+rhoso_edpm_nic1_name: nic1
+rhoso_edpm_nic2_name: nic2
+rhoso_edpm_bond_name: bond0
+
+# Control plane service defaults (overridden by CIQ)
+rhoso_tls_pod_level: false
+rhoso_dns_vip: ""
+rhoso_dns_upstream_servers: ""
+rhoso_worker_dns_servers: ""
+rhoso_dns_replicas: 1
+rhoso_galera_replicas: 1
+rhoso_galera_cell1_replicas: 1
+rhoso_galera_storage: "5G"
+rhoso_galera_cell1_storage: "5G"
+rhoso_memcached_replicas: 1
+rhoso_rabbitmq_replicas: 3
+rhoso_rabbitmq_cell1_replicas: 3
+rhoso_rabbitmq_cpu_limit: ""
+rhoso_rabbitmq_memory_limit: ""
+rhoso_keystone_replicas: 1
+rhoso_glance_replicas: 1
+rhoso_glance_backend: ""
+rhoso_cinder_api_replicas: 1
+rhoso_cinder_scheduler_replicas: 1
+rhoso_cinder_default_volume_type: ""
+rhoso_cinder_volume_backend_name: ""
+rhoso_cinder_volume_driver: ""
+rhoso_cinder_storage_protocol: ""
+rhoso_cinder_netapp_hostname: ""
+rhoso_cinder_netapp_vserver: ""
+rhoso_cinder_volume_secret: ""
+rhoso_cinder_volume_net_attachments: ""
+rhoso_neutron_replicas: 1
+rhoso_neutron_global_physnet_mtu: ""
+rhoso_neutron_physical_network_mtus: ""
+rhoso_neutron_api_timeout: ""
+rhoso_ovn_emit_need_to_frag: ""
+rhoso_nova_api_replicas: 1
+rhoso_nova_scheduler_replicas: 1
+rhoso_nova_conductor_cell0_replicas: 1
+rhoso_nova_conductor_cell1_replicas: 1
+rhoso_nova_metadata_enabled: true
+rhoso_nova_cell1_metadata_replicas: 1
+rhoso_nova_cell1_novnc_replicas: 1
+rhoso_placement_replicas: 1
+rhoso_horizon_enabled: false
+rhoso_horizon_replicas: 1
+rhoso_heat_enabled: false
+rhoso_heat_api_replicas: 1
+rhoso_heat_engine_replicas: 1
+rhoso_barbican_enabled: false
+rhoso_barbican_api_replicas: 1
+rhoso_barbican_worker_replicas: 1
+rhoso_octavia_enabled: false
+rhoso_designate_enabled: false
+rhoso_ironic_enabled: false
+rhoso_manila_enabled: false
+rhoso_telemetry_enabled: false
+rhoso_watcher_enabled: false
+rhoso_telemetry_storage: ""
+rhoso_telemetry_storage_class: ""
+rhoso_telemetry_retention: "24h"
+rhoso_telemetry_scrape_interval: "30s"
+rhoso_ovn_nb_replicas: 3
+rhoso_ovn_sb_replicas: 3
+rhoso_ovn_nb_storage: "10G"
+rhoso_ovn_sb_storage: "10G"
+
+# Ceph Storage defaults (overridden by CIQ)
+rhoso_ceph_external: false
+rhoso_ceph_cluster_name: ""
+rhoso_ceph_fsid: ""
+rhoso_ceph_mon_host: ""
+rhoso_ceph_client_name: "openstack"
+rhoso_ceph_client_key_path: ""
+rhoso_ceph_pool_volumes: "volumes"
+rhoso_ceph_pool_images: "images"
+rhoso_ceph_pool_vms: "vms"
+rhoso_ceph_rgw_enabled: false
+rhoso_ceph_rgw_endpoint: ""
+rhoso_ceph_rgw_tls: false
+
+# Neutron config defaults
+rhoso_mac_binding_age_threshold: ""
+
+# Control plane messaging defaults
+rhoso_messaging_bus_cluster: "rabbitmq"
+rhoso_notifications_bus_cluster: "rabbitmq"
+
+# FIPS compliance
+rhoso_fips_enabled: false
+
+# HA Operators
+rhoso_node_health_check_enabled: false
+rhoso_self_node_remediation_enabled: false
+rhoso_fence_agents_remediation_enabled: false
+
+# --- LSO (Local Storage Operator) defaults (v1.4) ---
+rhoso_lso_enabled: false
+rhoso_lso_namespace: openshift-local-storage
+rhoso_lso_channel: stable
+rhoso_lso_storage_class: "local-storage"
+rhoso_lso_device_types: "disk"
+rhoso_lso_device_mechanical: "NonRotational"
+rhoso_lso_min_size: "100Gi"
+rhoso_lso_volume_mode: "Block"
+rhoso_lso_node_selector_label: "cluster.ocs.openshift.io/openshift-storage"
+
+# --- Observability (Cluster Observability Operator) defaults (v1.4) ---
+rhoso_observability_enabled: false
+rhoso_observability_namespace: openshift-cluster-observability-operator
+rhoso_observability_channel: stable
+rhoso_observability_install_plan_approval: Automatic
+rhoso_monitoring_stack_enabled: false
+rhoso_monitoring_stack_name: "rhoso-monitoring"
+
+# --- Trident (NetApp CSI Storage) defaults (v1.4) ---
+rhoso_trident_enabled: false
+rhoso_trident_namespace: trident
+rhoso_trident_image_registry: ""
+rhoso_trident_image: ""
+rhoso_trident_autosupport_image: ""
+rhoso_trident_backend_name: "ontap-backend"
+rhoso_trident_storage_driver: "ontap-san"
+rhoso_trident_mgmt_lif: ""
+rhoso_trident_data_lif: ""
+rhoso_trident_svm: ""
+rhoso_trident_secret_name: "backend-ontap-secret"
+rhoso_trident_storage_class: "ontap-gold"
+rhoso_trident_volume_binding_mode: "Immediate"
+
+# --- Multipath configuration defaults (v1.4) ---
+rhoso_multipath_enabled: false
+rhoso_multipath_secret_name: "multipath-config"
+rhoso_multipath_user_friendly_names: "yes"
+rhoso_multipath_find_multipaths: "yes"
+
+# EDPM performance tuning defaults (overridden by CIQ)
+rhoso_edpm_ovn_bridge_mappings: "datacentre:br-ex"
+rhoso_edpm_tuned_profile: ""
+rhoso_edpm_kernel_args: ""
+rhoso_edpm_cpu_dedicated_set: ""
+rhoso_edpm_reserved_host_memory_mb: ""
+rhoso_edpm_initial_cpu_allocation_ratio: ""
+rhoso_edpm_sshd_allowed_ranges: ""
+rhoso_edpm_bootstrap_command: ""
+
+# Disconnected defaults (overridden by CIQ when Deployment Mode=disconnected)
+rhoso_disconnected_modes:
+  - disconnected
+  - airgapped
+  - offline
+rhoso_wait_mcp_timeout: 45m
+
+# CRDs that must exist on RHOCP (installed by Operators) before applying CRs.
+# Format: {name, group, kind, scope} — checked via `oc get crd <name>`
+rhoso_required_crds_control_plane:
+  - name: openstacks.operator.openstack.org
+    kind: OpenStack
+    purpose: OpenStack Operator initialization CR
+  - name: openstackcontrolplanes.core.openstack.org
+    kind: OpenStackControlPlane
+    purpose: RHOSO control plane services
+  - name: netconfigs.network.openstack.org
+    kind: NetConfig
+    purpose: Data plane / isolated network IPAM
+  - name: network-attachment-definitions.k8s.cni.cncf.io
+    kind: NetworkAttachmentDefinition
+    purpose: Attach control-plane pods to isolated networks
+  - name: nodenetworkconfigurationpolicies.nmstate.io
+    kind: NodeNetworkConfigurationPolicy
+    purpose: Worker NIC / VLAN isolation (NMState)
+  - name: ipaddresspools.metallb.io
+    kind: IPAddressPool
+    purpose: MetalLB VIP ranges for RHOSO services
+  - name: l2advertisements.metallb.io
+    kind: L2Advertisement
+    purpose: MetalLB L2 VIP advertisement
+
+rhoso_required_crds_data_plane:
+  - name: openstackdataplanenodesets.dataplane.openstack.org
+    kind: OpenStackDataPlaneNodeSet
+    purpose: Logical grouping of data plane nodes
+  - name: openstackdataplanedeployments.dataplane.openstack.org
+    kind: OpenStackDataPlaneDeployment
+    purpose: Triggers AnsibleEE deploy of NodeSets
+  - name: openstackdataplaneservices.dataplane.openstack.org
+    kind: OpenStackDataPlaneService
+    purpose: EDPM services used by NodeSets
+  - name: openstackcontrolplanes.core.openstack.org
+    kind: OpenStackControlPlane
+    purpose: Functional control plane prerequisite
+
+rhoso_required_crds_prerequisites:
+  - name: nmstates.nmstate.io
+    kind: NMState
+    purpose: NMState Operator instance (worker NIC configuration)
+  - name: nodenetworkconfigurationpolicies.nmstate.io
+    kind: NodeNetworkConfigurationPolicy
+    purpose: Worker NIC / VLAN isolation (NMState)
+  - name: metallbs.metallb.io
+    kind: MetalLB
+    purpose: MetalLB Operator instance
+  - name: ipaddresspools.metallb.io
+    kind: IPAddressPool
+    purpose: MetalLB VIP ranges for RHOSO services
+  - name: l2advertisements.metallb.io
+    kind: L2Advertisement
+    purpose: MetalLB L2 VIP advertisement
+  - name: certmanagers.operator.openshift.io
+    kind: CertManager
+    purpose: Cert-Manager Operator for TLS certificate management
+  - name: certificates.cert-manager.io
+    kind: Certificate
+    purpose: TLS certificate resources
+
+rhoso_required_crds_unprovisioned:
+  - name: baremetalhosts.metal3.io
+    kind: BareMetalHost
+    purpose: Bare-metal provisioning for unprovisioned nodes

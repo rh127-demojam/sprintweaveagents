@@ -1,0 +1,61 @@
+---
+# Generate all OCP manifests for review without applying to cluster.
+- name: Set generate-only mode
+  ansible.builtin.set_fact:
+    ocp_apply_manifests: false
+
+- name: Generate install-config.yaml
+  ansible.builtin.include_tasks: install_config/generate_install_config.yml
+
+- name: Generate agent-config.yaml (ABI/ABI-DC)
+  ansible.builtin.include_tasks: install_config/generate_agent_config.yml
+  when: ocp_is_abi | bool
+
+- name: Generate NMState configs
+  ansible.builtin.include_tasks: install_config/generate_nmstate_configs.yml
+  when: ocp_nmstate_interfaces | default([]) | length > 0
+
+- name: Generate HAProxy config (platform=none)
+  ansible.builtin.template:
+    src: ocp_haproxy_config.j2
+    dest: "{{ ocp_manifest_dir }}/haproxy.cfg"
+    mode: "0644"
+  delegate_to: localhost
+  when: ocp_lb_type | default('') | lower == 'haproxy'
+
+- name: Generate DNS zone file (platform=none)
+  ansible.builtin.template:
+    src: ocp_dns_records.j2
+    dest: "{{ ocp_manifest_dir }}/dns-zone-{{ ocp_cluster_name }}.{{ ocp_base_domain }}.db"
+    mode: "0644"
+  delegate_to: localhost
+  when: ocp_dns_records | default([]) | length > 0
+
+- name: Generate disconnected CRs
+  ansible.builtin.include_tasks: manifests/_generate_disconnected_crs.yml
+  when: ocp_is_disconnected | bool
+
+- name: Generate ImageSetConfiguration for oc-mirror
+  ansible.builtin.template:
+    src: ocp_mirror_imageset.yaml.j2
+    dest: "{{ ocp_manifest_dir }}/imageset-config.yaml"
+    mode: "0644"
+  delegate_to: localhost
+  when: ocp_is_disconnected | bool
+
+- name: List all generated manifests
+  ansible.builtin.find:
+    paths: "{{ ocp_manifest_dir }}"
+    patterns: "*"
+    file_type: file
+  register: ocp_generated_manifests
+  delegate_to: localhost
+
+- name: Manifest generation summary
+  ansible.builtin.debug:
+    msg:
+      - "== OCP Manifest Generation Complete =="
+      - "Output directory: {{ ocp_manifest_dir }}"
+      - "Total files: {{ ocp_generated_manifests.files | length }}"
+      - "Files:"
+      - "{{ ocp_generated_manifests.files | map(attribute='path') | map('basename') | sort | list }}"

@@ -1,0 +1,22 @@
+{% for net in rhoso_networks %}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ net['Network Name'] }}
+  namespace: {{ rhoso_openstack_ns }}
+spec:
+  config: |
+    {
+      "cniVersion": "{{ rhoso_nad_cni_version }}",
+      "name": "{{ net['Network Name'] }}",
+      "type": "{{ net['NAD Type'] }}",
+      "master": "{{ net['NAD Master Interface'] }}",
+      "ipam": {
+        "type": "whereabouts",
+        "range": "{{ net['CIDR'] }}",
+        "range_start": "{{ net['Whereabouts Start'] }}",
+        "range_end": "{{ net['Whereabouts End'] }}"
+      }
+    }
+{% endfor %}

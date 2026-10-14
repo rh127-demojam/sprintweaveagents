@@ -1,0 +1,121 @@
+---
+# Configure and validate NTP on bastion host using chrony/timedatectl.
+- name: Generate chrony configuration
+  ansible.builtin.template:
+    src: ocp_chrony_config.j2
+    dest: /etc/chrony.conf
+    mode: "0644"
+    backup: true
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_additional_ntp_sources | default('') | length > 0
+
+- name: Restart chronyd after config change
+  ansible.builtin.systemd:
+    name: chronyd
+    state: restarted
+    enabled: true
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_additional_ntp_sources | default('') | length > 0
+
+- name: Ensure chronyd is running and enabled
+  ansible.builtin.systemd:
+    name: chronyd
+    state: started
+    enabled: true
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- NTP validation: 3 independent checks ---
+
+- name: "NTP check 1/3 — timedatectl (system clock sync status)"
+  ansible.builtin.command:
+    cmd: timedatectl show --property=NTPSynchronized --value
+  register: _timedatectl_sync
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "NTP check 2/3 — chronyc tracking (clock source & stratum)"
+  ansible.builtin.command:
+    cmd: chronyc tracking
+  register: _chronyc_tracking
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "NTP check 3/3 — chronyc sources (reachable NTP servers)"
+  ansible.builtin.command:
+    cmd: chronyc sources -v
+  register: _chronyc_sources
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- Parse and report ---
+
+- name: Parse NTP validation results
+  ansible.builtin.set_fact:
+    _ntp_synced: "{{ _timedatectl_sync.stdout | default('') | trim | lower == 'yes' }}"
+    _ntp_leap_ok: "{{ 'Normal' in (_chronyc_tracking.stdout | default('')) }}"
+    _ntp_ref_valid: "{{ '00000000' not in (_chronyc_tracking.stdout_lines | default(['']) | first) }}"
+    _ntp_has_sources: "{{ (_chronyc_sources.stdout | default('')) is search('\\^[\\*\\+\\#\\-]') }}"
+
+- name: NTP validation report
+  ansible.builtin.debug:
+    msg:
+      - "=== NTP Validation Report ==="
+      - "timedatectl NTPSynchronized : {{ 'YES' if _ntp_synced else 'NO' }}"
+      - "chronyc Leap status         : {{ 'Normal' if _ntp_leap_ok else 'ABNORMAL' }}"
+      - "chronyc Reference ID        : {{ 'Valid' if _ntp_ref_valid else 'NONE (00000000)' }}"
+      - "chronyc reachable sources   : {{ 'Found' if _ntp_has_sources else 'NONE' }}"
+      - ""
+      - "--- chronyc tracking ---"
+      - "{{ _chronyc_tracking.stdout_lines | default(['(not available)']) }}"
+      - ""
+      - "--- chronyc sources ---"
+      - "{{ _chronyc_sources.stdout_lines | default(['(not available)']) }}"
+
+- name: Warn if NTP is not synchronized
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: NTP is NOT synchronized on bastion. OCP requires accurate time
+      across all nodes. Ensure an NTP source is reachable (gateway, internal NTP
+      server, or configure 'Additional NTP Sources' in the CIQ).
+  when: not (_ntp_synced | bool) or not (_ntp_ref_valid | bool)
+
+- name: NTP synchronized — OK
+  ansible.builtin.debug:
+    msg: "NTP is synchronized. Clock source is valid."
+  when: (_ntp_synced | bool) and (_ntp_ref_valid | bool)

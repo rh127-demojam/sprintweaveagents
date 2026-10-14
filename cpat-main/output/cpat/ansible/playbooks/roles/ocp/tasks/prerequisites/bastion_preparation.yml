@@ -1,0 +1,377 @@
+---
+# Prepare the bastion host for OCP installation.
+# Uses hostvars[inventory_hostname] to access localhost facts when
+# delegating tasks to the bastion — avoids delegate_to scoping issues.
+
+- name: Display bastion target
+  ansible.builtin.debug:
+    msg:
+      - "Bastion host: {{ ocp_bastion_ip | default(ocp_bastion_hostname | default('localhost')) }}"
+      - "Bastion user: {{ ocp_bastion_ssh_user | default('root') }}"
+      - "Bastion OS: {{ ocp_bastion_os | default('unknown') }}"
+      - "SSH key: {{ ocp_bastion_ssh_key_path | default('not configured') }}"
+
+- name: Check which required packages are installed on bastion
+  ansible.builtin.command:
+    cmd: rpm -q podman haproxy nmstate bind-utils chrony jq tar wget curl httpd-tools
+  register: _pkg_check
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: All packages already present
+  ansible.builtin.debug:
+    msg: "All required packages are already installed on bastion."
+  when: _pkg_check.rc == 0
+
+- name: Install missing packages on bastion
+  ansible.builtin.dnf:
+    name:
+      - podman
+      - httpd-tools
+      - jq
+      - nmstate
+      - bind-utils
+      - haproxy
+      - chrony
+      - tar
+      - wget
+      - curl
+    state: present
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _pkg_check.rc != 0
+  register: _pkg_install
+  ignore_errors: true
+
+- name: Verify packages after install attempt
+  ansible.builtin.command:
+    cmd: rpm -q podman haproxy nmstate bind-utils chrony jq tar wget curl httpd-tools
+  register: _pkg_verify
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _pkg_check.rc != 0
+
+- name: Fail if packages still missing after install attempt
+  vars:
+    _result: "{{ _pkg_verify if _pkg_verify is not skipped else _pkg_check }}"
+    _missing: "{{ _result.stdout_lines | default([]) | select('search', 'not installed') | list }}"
+  ansible.builtin.fail:
+    msg: |
+      {{ _missing | length }} required package(s) are not installed on bastion and could not be installed:
+      {% for pkg in _missing %}
+        - {{ pkg }}
+      {% endfor %}
+      For disconnected environments, ensure a local repo (ISO/DVD) is configured:
+        sudo mount /dev/sr0 /mnt
+        Then configure baseurl=file:///mnt/BaseOS and /mnt/AppStream in /etc/yum.repos.d/
+  when:
+    - (_pkg_verify is not skipped and _pkg_verify.rc != 0) or
+      (_pkg_verify is skipped and _pkg_check.rc != 0)
+
+- name: Ensure OCP install directory exists on bastion
+  ansible.builtin.file:
+    path: "{{ ocp_install_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Ensure Quay root directory exists on bastion
+  ansible.builtin.file:
+    path: "{{ ocp_quay_root_directory | default('/opt/quay') }}"
+    state: directory
+    mode: "0755"
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_registry_mirror_enabled | default(false) | bool
+
+- name: Copy pull secret to bastion
+  ansible.builtin.copy:
+    src: "{{ ocp_pull_secret_path }}"
+    dest: "{{ ocp_install_dir }}/pull-secret.json"
+    mode: "0600"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_pull_secret_path | default('') | length > 0
+
+- name: Copy SSH public key to bastion
+  ansible.builtin.copy:
+    src: "{{ ocp_ssh_public_key_path }}"
+    dest: "{{ ocp_install_dir }}/ssh-key.pub"
+    mode: "0644"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_ssh_public_key_path | default('') | length > 0
+
+- name: Copy openshift-install binary to bastion
+  ansible.builtin.copy:
+    src: /usr/local/bin/openshift-install
+    dest: /usr/local/bin/openshift-install
+    mode: "0755"
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Copy oc binary to bastion
+  ansible.builtin.copy:
+    src: /usr/local/bin/oc
+    dest: /usr/local/bin/oc
+    mode: "0755"
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Verify openshift-install on bastion
+  ansible.builtin.command:
+    cmd: openshift-install version
+  register: _oi_version
+  changed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Show openshift-install version on bastion
+  ansible.builtin.debug:
+    msg: "{{ _oi_version.stdout_lines | default([]) }}"
+
+- name: Enable and start chronyd on bastion
+  ansible.builtin.service:
+    name: chronyd
+    state: started
+    enabled: true
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- HAProxy load balancer for platform=none ---
+- name: Compute effective VIPs
+  ansible.builtin.set_fact:
+    _effective_api_vip: "{{ ocp_api_vip | default('') | ternary(ocp_api_vip, ocp_api_vip_platform_none | default('')) }}"
+    _effective_ingress_vip: "{{ ocp_ingress_vip | default('') }}"
+    _effective_prefix: "{{ ocp_machine_network_cidr | default('10.0.0.0/24') | regex_replace('.*/','') }}"
+
+- name: Add API VIP to bastion interface
+  ansible.builtin.shell:
+    cmd: |
+      ip addr show {{ ocp_bastion_interface | default('enp1s0') }} | grep -q '{{ _effective_api_vip }}/' || \
+        ip addr add {{ _effective_api_vip }}/{{ _effective_prefix }} dev {{ ocp_bastion_interface | default('enp1s0') }}
+  become: true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _effective_api_vip | length > 0
+
+- name: Add Ingress VIP to bastion interface
+  ansible.builtin.shell:
+    cmd: |
+      ip addr show {{ ocp_bastion_interface | default('enp1s0') }} | grep -q '{{ _effective_ingress_vip }}/' || \
+        ip addr add {{ _effective_ingress_vip }}/{{ _effective_prefix }} dev {{ ocp_bastion_interface | default('enp1s0') }}
+  become: true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _effective_ingress_vip | length > 0
+
+- name: Enable ip_nonlocal_bind
+  ansible.builtin.shell:
+    cmd: |
+      sysctl -w net.ipv4.ip_nonlocal_bind=1
+      grep -q 'net.ipv4.ip_nonlocal_bind' /etc/sysctl.conf 2>/dev/null \
+        && sed -i 's/^net.ipv4.ip_nonlocal_bind.*/net.ipv4.ip_nonlocal_bind=1/' /etc/sysctl.conf \
+        || echo 'net.ipv4.ip_nonlocal_bind=1' >> /etc/sysctl.conf
+  become: true
+  changed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Generate HAProxy config
+  ansible.builtin.template:
+    src: ocp_haproxy_config.j2
+    dest: "{{ ocp_lb_config_path if (ocp_lb_config_path | default('') | length > 0) else '/etc/haproxy/haproxy.cfg' }}"
+    mode: "0644"
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_lb_type | default('HAProxy') == 'HAProxy'
+    - ocp_bmc_hosts | default([]) | length > 0
+
+- name: Allow HAProxy to connect to any port (SELinux)
+  ansible.builtin.shell:
+    cmd: setsebool -P haproxy_connect_any=1 2>/dev/null || true
+  become: true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Validate HAProxy config
+  ansible.builtin.shell:
+    cmd: haproxy -c -f /etc/haproxy/haproxy.cfg 2>&1
+  become: true
+  register: _haproxy_check
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_lb_type | default('HAProxy') == 'HAProxy'
+    - ocp_bmc_hosts | default([]) | length > 0
+
+- name: Display HAProxy config check result
+  ansible.builtin.debug:
+    msg: "{{ _haproxy_check.stdout_lines | default(['skipped']) }}"
+  when: _haproxy_check is not skipped
+
+- name: Start and enable HAProxy
+  ansible.builtin.service:
+    name: haproxy
+    state: restarted
+    enabled: true
+  become: true
+  register: _haproxy_start
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_lb_type | default('HAProxy') == 'HAProxy'
+    - ocp_bmc_hosts | default([]) | length > 0
+    - _haproxy_check.rc | default(1) == 0
+
+- name: HAProxy start failed — show diagnostics
+  ansible.builtin.shell:
+    cmd: |
+      echo "=== HAProxy Status ==="
+      systemctl status haproxy --no-pager 2>&1 || true
+      echo ""
+      echo "=== HAProxy Config ==="
+      cat /etc/haproxy/haproxy.cfg 2>&1
+      echo ""
+      echo "=== HAProxy Journal ==="
+      journalctl -xeu haproxy.service --no-pager -n 20 2>&1 || true
+  become: true
+  register: _haproxy_diag
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - _haproxy_start is defined
+    - _haproxy_start is failed or (_haproxy_start is skipped)
+
+- name: Display HAProxy diagnostics
+  ansible.builtin.debug:
+    msg: "{{ _haproxy_diag.stdout_lines | default(['HAProxy started successfully']) }}"
+  when: _haproxy_diag is not skipped
+
+- name: Open firewall ports for OCP
+  ansible.builtin.shell:
+    cmd: >-
+      firewall-cmd
+      --add-port={{ ocp_api_server_port | default(6443) }}/tcp
+      --add-port={{ ocp_mcs_port | default(22623) }}/tcp
+      --add-port={{ ocp_ingress_https_port | default(443) }}/tcp
+      --add-port={{ ocp_iso_http_port | default(8089) }}/tcp
+      2>/dev/null || true
+  become: true
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Bastion preparation complete
+  ansible.builtin.debug:
+    msg:
+      - "Bastion host {{ ocp_bastion_ip | default(ocp_bastion_hostname) }} prepared for OCP installation."
+      - "Install dir: {{ ocp_install_dir }}"
+      - "Pull secret: {{ 'copied' if (ocp_pull_secret_path | default('') | length > 0) else 'not uploaded yet' }}"
+      - "SSH key: {{ 'copied' if (ocp_ssh_public_key_path | default('') | length > 0) else 'not uploaded yet' }}"
+      - "HAProxy: {{ 'configured' if (ocp_bmc_hosts | default([]) | length > 0) else 'skipped (no BMC hosts)' }}"
+      - "VIPs: {{ ocp_api_vip | default('not set') }} (API), {{ ocp_ingress_vip | default('not set') }} (Ingress)"

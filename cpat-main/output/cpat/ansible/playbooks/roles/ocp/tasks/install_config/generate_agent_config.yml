@@ -1,0 +1,36 @@
+---
+# Generate agent-config.yaml for ABI/ABI-DC installations.
+# Templates locally for review, then copies to bastion.
+
+- name: Generate agent-config.yaml (local artifact)
+  ansible.builtin.template:
+    src: ocp_agent_config.yaml.j2
+    dest: "{{ ocp_manifest_dir }}/agent-config.yaml"
+    mode: "0600"
+  delegate_to: localhost
+  when: ocp_is_abi | bool
+
+- name: Copy agent-config.yaml to bastion
+  ansible.builtin.copy:
+    src: "{{ ocp_manifest_dir }}/agent-config.yaml"
+    dest: "{{ ocp_install_dir }}/agent-config.yaml"
+    mode: "0600"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_is_abi | bool
+
+- name: agent-config.yaml generated
+  ansible.builtin.debug:
+    msg:
+      - "agent-config.yaml generated and copied to bastion"
+      - "Bastion path: {{ ocp_install_dir }}/agent-config.yaml"
+  when: ocp_is_abi | bool
+
+- name: Skip agent-config (not ABI)
+  ansible.builtin.debug:
+    msg: "agent-config.yaml not needed for {{ ocp_install_method }} installation."
+  when: not (ocp_is_abi | bool)

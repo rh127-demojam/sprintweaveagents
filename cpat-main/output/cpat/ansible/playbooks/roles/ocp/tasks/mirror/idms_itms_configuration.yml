@@ -1,0 +1,179 @@
+---
+# Configure IDMS/ITMS from oc-mirror output for disconnected environments.
+#
+# oc-mirror v2 generates IDMS/ITMS YAML in the workspace results directory.
+# For ABI-DC: copy them to <install-dir>/openshift/ BEFORE creating the agent ISO.
+# For post-install: apply them to the cluster via 'oc apply'.
+
+- name: Find oc-mirror generated IDMS/ITMS files
+  ansible.builtin.shell:
+    cmd: |
+      RESULTS_DIR=""
+      # oc-mirror v2: working-dir/cluster-resources/ under the workspace
+      for d in \
+        "{{ ocp_install_dir }}/oc-mirror-workspace/working-dir/cluster-resources" \
+        "{{ ocp_install_dir }}/working-dir/cluster-resources" \
+        ; do
+        [ -d "$d" ] && RESULTS_DIR="$d" && break
+      done
+      # oc-mirror v1 fallback: results-<timestamp>/
+      if [ -z "$RESULTS_DIR" ]; then
+        for d in $(ls -dt {{ ocp_install_dir }}/oc-mirror-workspace/results-* 2>/dev/null); do
+          [ -d "$d" ] && RESULTS_DIR="$d" && break
+        done
+      fi
+      if [ -z "$RESULTS_DIR" ]; then
+        echo "NO_RESULTS_DIR"
+        exit 0
+      fi
+      echo "RESULTS_DIR=$RESULTS_DIR"
+      find "$RESULTS_DIR" -name '*.yaml' -o -name '*.yml' | sort
+  register: _idms_find
+  changed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Display oc-mirror results directory
+  ansible.builtin.debug:
+    msg: "{{ _idms_find.stdout_lines | default([]) }}"
+
+- name: Set oc-mirror results directory fact
+  ansible.builtin.set_fact:
+    _oc_mirror_results_dir: >-
+      {{ (_idms_find.stdout_lines | select('match', '^RESULTS_DIR=') | first | default('RESULTS_DIR='))
+         .split('=', 1)[1] | default('') }}
+
+- name: Skip if no oc-mirror results found
+  ansible.builtin.debug:
+    msg: >-
+      No oc-mirror results directory found. If you ran oc-mirror manually,
+      ensure the workspace is at {{ ocp_install_dir }}/oc-mirror-workspace/.
+  when: _oc_mirror_results_dir | length == 0 or 'NO_RESULTS_DIR' in (_idms_find.stdout | default(''))
+
+# --- Pre-install: copy IDMS/ITMS into openshift/ directory for agent ISO ---
+- name: Copy IDMS/ITMS into openshift manifests directory (pre-install)
+  when:
+    - _oc_mirror_results_dir | length > 0
+    - "'NO_RESULTS_DIR' not in (_idms_find.stdout | default(''))"
+  block:
+    - name: Ensure openshift manifests directory exists
+      ansible.builtin.file:
+        path: "{{ ocp_install_dir }}/openshift"
+        state: directory
+        mode: "0755"
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Copy oc-mirror YAML files to openshift/ directory
+      ansible.builtin.shell:
+        cmd: |
+          COPIED=0
+          for f in $(find {{ _oc_mirror_results_dir }} -name '*.yaml' -o -name '*.yml' 2>/dev/null); do
+            BASENAME=$(basename "$f")
+            cp -v "$f" {{ ocp_install_dir }}/openshift/"$BASENAME"
+            COPIED=$((COPIED + 1))
+          done
+          echo "Copied $COPIED manifest files to {{ ocp_install_dir }}/openshift/"
+          ls -la {{ ocp_install_dir }}/openshift/
+      register: _copy_result
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Display copied manifests
+      ansible.builtin.debug:
+        msg: "{{ _copy_result.stdout_lines | default([]) }}"
+
+    - name: Fetch IDMS/ITMS manifests to CPAT artifacts directory
+      ansible.builtin.shell:
+        cmd: |
+          find {{ _oc_mirror_results_dir }} -name '*.yaml' -o -name '*.yml'
+      register: _manifest_list
+      changed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Fetch each manifest to CPAT for review
+      ansible.builtin.fetch:
+        src: "{{ item }}"
+        dest: "{{ ocp_manifest_dir }}/{{ item | basename }}"
+        flat: true
+      loop: "{{ _manifest_list.stdout_lines | default([]) }}"
+      when: item | length > 0
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- Post-install: apply to running cluster ---
+- name: Apply IDMS/ITMS to running cluster (post-install)
+  when:
+    - _oc_mirror_results_dir | length > 0
+    - "'NO_RESULTS_DIR' not in (_idms_find.stdout | default(''))"
+    - ocp_apply_manifests | bool
+    - ocp_kubeconfig_path | default('') | length > 0
+  block:
+    - name: Check if cluster is accessible
+      ansible.builtin.command:
+        cmd: "{{ ocp_oc_binary | default('oc') }} get nodes"
+      environment:
+        KUBECONFIG: "{{ ocp_kubeconfig_path }}"
+      register: _cluster_check
+      failed_when: false
+      changed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Apply oc-mirror manifests to cluster
+      ansible.builtin.shell:
+        cmd: |
+          for f in $(find {{ _oc_mirror_results_dir }} -name '*.yaml' -o -name '*.yml' 2>/dev/null); do
+            echo "Applying: $(basename $f)"
+            {{ ocp_oc_binary | default('oc') }} apply -f "$f" 2>&1 || true
+          done
+      environment:
+        KUBECONFIG: "{{ ocp_kubeconfig_path }}"
+      when: _cluster_check.rc == 0
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Cluster not accessible — manifests copied for manual apply
+      ansible.builtin.debug:
+        msg: >-
+          Cluster not accessible (kubeconfig may not be valid yet).
+          IDMS/ITMS manifests have been copied to {{ ocp_install_dir }}/openshift/
+          and will be applied automatically during ABI installation.
+      when: _cluster_check.rc != 0
+
+- name: IDMS/ITMS configuration complete
+  ansible.builtin.debug:
+    msg: >-
+      IDMS/ITMS configuration done.
+      Manifests from oc-mirror are in {{ ocp_install_dir }}/openshift/.
+      For ABI-DC: they will be baked into the agent ISO automatically.
+      For post-install: they have been applied to the running cluster.

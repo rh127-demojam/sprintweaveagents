@@ -1,0 +1,7 @@
+# ---------------------------------------------------------------------------
+# Ansible Galaxy collections for CPAT EE
+# Only ansible.builtin is used — included by default in ansible-core.
+# Add collections here if playbooks are extended to use them.
+# ---------------------------------------------------------------------------
+---
+collections: []

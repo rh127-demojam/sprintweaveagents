@@ -1,0 +1,155 @@
+---
+# OCP Role Entry Point — routes to the selected task based on ocp_selected_task.
+- name: OCP installation context
+  ansible.builtin.debug:
+    msg:
+      - "CPAT OCP Installation"
+      - "Cluster: {{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+      - "OCP Version: {{ ocp_version }}"
+      - "Install Method: {{ ocp_install_method }}"
+      - "Platform: {{ ocp_platform }}"
+      - "Deployment Mode: {{ ocp_deployment_mode }}"
+      - "Task: {{ ocp_selected_task }}"
+
+- name: Load shared OCP CIQ context
+  ansible.builtin.include_tasks: common/_load_ciq_context.yml
+
+# ---------- Task Routing ----------
+
+- name: Full install (all steps)
+  when: ocp_selected_task == 'full_install'
+  block:
+    - ansible.builtin.include_tasks: common/_verify_prerequisites.yml
+    - ansible.builtin.include_tasks: prerequisites/bastion_preparation.yml
+    - ansible.builtin.include_tasks: prerequisites/dns_dhcp_validation.yml
+    - ansible.builtin.include_tasks: prerequisites/ntp_sync.yml
+    - ansible.builtin.include_tasks: mirror/mirror_registry_install.yml
+      when: ocp_is_disconnected | bool
+    - ansible.builtin.include_tasks: mirror/oc_mirror_execution.yml
+      when: ocp_is_disconnected | bool
+    - ansible.builtin.include_tasks: mirror/idms_itms_configuration.yml
+      when: ocp_is_disconnected | bool
+    - ansible.builtin.include_tasks: install_config/generate_install_config.yml
+    - ansible.builtin.include_tasks: install_config/generate_agent_config.yml
+      when: ocp_is_abi | bool
+    - ansible.builtin.include_tasks: install_config/generate_nmstate_configs.yml
+      when: ocp_nmstate_interfaces | default([]) | length > 0
+    - ansible.builtin.include_tasks: ignition/generate_ignition_configs.yml
+      when: ocp_is_upi | bool
+    - ansible.builtin.include_tasks: ignition/create_agent_iso.yml
+      when: ocp_is_abi | bool
+    - ansible.builtin.include_tasks: ignition/boot_nodes_from_iso.yml
+      when: ocp_is_abi | bool
+    - ansible.builtin.include_tasks: bootstrap/bootstrap_cluster.yml
+    - ansible.builtin.include_tasks: bootstrap/wait_bootstrap_complete.yml
+    - ansible.builtin.include_tasks: cluster_config/approve_csrs.yml
+    - ansible.builtin.include_tasks: cluster_config/configure_authentication.yml
+    - ansible.builtin.include_tasks: cluster_config/day2_operator_installation.yml
+    - ansible.builtin.include_tasks: network/metallb_configuration.yml
+      when: ocp_metallb_operator_enabled | bool
+    - ansible.builtin.include_tasks: network/sriov_multus_configuration.yml
+      when: ocp_sriov_operator_enabled | bool or ocp_multus_enabled | bool
+    - ansible.builtin.include_tasks: validation/cluster_health_check.yml
+    - ansible.builtin.include_tasks: validation/node_readiness_check.yml
+
+- name: Generate manifests only
+  ansible.builtin.include_tasks: manifests/manifest_generation.yml
+  when: ocp_selected_task == 'generate_manifests'
+
+- name: Prerequisites (Bastion + DNS/DHCP + NTP)
+  ansible.builtin.include_tasks: prerequisites/all_prerequisites.yml
+  when: ocp_selected_task == 'prerequisites'
+
+- name: Bastion preparation
+  ansible.builtin.include_tasks: prerequisites/bastion_preparation.yml
+  when: ocp_selected_task == 'bastion_preparation'
+
+- name: DNS/DHCP validation
+  ansible.builtin.include_tasks: prerequisites/dns_dhcp_validation.yml
+  when: ocp_selected_task == 'dns_dhcp_validation'
+
+- name: NTP sync
+  ansible.builtin.include_tasks: prerequisites/ntp_sync.yml
+  when: ocp_selected_task == 'ntp_sync'
+
+- name: Mirror registry
+  ansible.builtin.include_tasks: mirror/mirror_registry_install.yml
+  when: ocp_selected_task == 'mirror_registry'
+
+- name: OC mirror execution
+  ansible.builtin.include_tasks: mirror/oc_mirror_execution.yml
+  when: ocp_selected_task == 'oc_mirror'
+
+- name: IDMS/ITMS configuration
+  ansible.builtin.include_tasks: mirror/idms_itms_configuration.yml
+  when: ocp_selected_task == 'idms_itms_config'
+
+- name: Generate install-config.yaml
+  ansible.builtin.include_tasks: install_config/generate_install_config.yml
+  when: ocp_selected_task == 'install_config'
+
+- name: Generate agent-config.yaml
+  ansible.builtin.include_tasks: install_config/generate_agent_config.yml
+  when: ocp_selected_task == 'agent_config'
+
+- name: Generate NMState configs
+  ansible.builtin.include_tasks: install_config/generate_nmstate_configs.yml
+  when: ocp_selected_task == 'nmstate_configs'
+
+- name: Generate ignition configs
+  ansible.builtin.include_tasks: ignition/generate_ignition_configs.yml
+  when: ocp_selected_task == 'ignition_configs'
+
+- name: Create agent ISO
+  ansible.builtin.include_tasks: ignition/create_agent_iso.yml
+  when: ocp_selected_task == 'agent_iso'
+
+- name: Boot nodes from agent ISO
+  ansible.builtin.include_tasks: ignition/boot_nodes_from_iso.yml
+  when: ocp_selected_task == 'boot_nodes'
+
+- name: Bootstrap cluster
+  ansible.builtin.include_tasks: bootstrap/bootstrap_cluster.yml
+  when: ocp_selected_task == 'bootstrap'
+
+- name: Wait for install to complete
+  ansible.builtin.include_tasks: bootstrap/wait_bootstrap_complete.yml
+  when: ocp_selected_task == 'wait_install'
+
+- name: Approve CSRs
+  ansible.builtin.include_tasks: cluster_config/approve_csrs.yml
+  when: ocp_selected_task == 'approve_csrs'
+
+- name: Configure authentication
+  ansible.builtin.include_tasks: cluster_config/configure_authentication.yml
+  when: ocp_selected_task == 'auth_config'
+
+- name: Day-2 operator installation
+  ansible.builtin.include_tasks: cluster_config/day2_operator_installation.yml
+  when: ocp_selected_task == 'day2_operators'
+
+- name: MetalLB configuration
+  ansible.builtin.include_tasks: network/metallb_configuration.yml
+  when: ocp_selected_task == 'metallb_config'
+
+- name: SR-IOV/Multus configuration
+  ansible.builtin.include_tasks: network/sriov_multus_configuration.yml
+  when: ocp_selected_task == 'sriov_config'
+
+- name: Cluster health check
+  ansible.builtin.include_tasks: validation/cluster_health_check.yml
+  when: ocp_selected_task == 'health_check'
+
+- name: Node readiness check
+  ansible.builtin.include_tasks: validation/node_readiness_check.yml
+  when: ocp_selected_task == 'node_readiness'
+
+# ---------- Uninstall ----------
+
+- name: Uninstall mirror registry
+  ansible.builtin.include_tasks: uninstall/uninstall_mirror_registry.yml
+  when: ocp_selected_task == 'uninstall_mirror_registry'
+
+- name: Destroy OCP cluster
+  ansible.builtin.include_tasks: uninstall/destroy_cluster.yml
+  when: ocp_selected_task == 'destroy_cluster'

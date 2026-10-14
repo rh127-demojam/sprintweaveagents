@@ -1,0 +1,115 @@
+---
+# Wait for full OCP installation to complete.
+# Runs on bastion via async/poll — can take 30-120 minutes.
+
+- name: Wait for install to complete (async)
+  ansible.builtin.shell:
+    cmd: >-
+      {{ ocp_openshift_install_binary }}
+      --dir {{ ocp_install_dir }}
+      {{ 'agent ' if (ocp_is_abi | bool or ocp_is_sno | bool) else '' }}wait-for install-complete
+      --log-level=info
+      > {{ ocp_install_dir }}/install-complete.log 2>&1
+  register: ocp_install_complete_job
+  failed_when: false
+  async: 10800
+  poll: 0
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_apply_manifests | bool
+
+- name: Wait for install-complete to finish
+  ansible.builtin.async_status:
+    jid: "{{ ocp_install_complete_job.ansible_job_id }}"
+  register: ocp_install_complete_result
+  until: ocp_install_complete_result.finished
+  retries: 360
+  delay: 30
+  failed_when: false
+  ignore_unreachable: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
+  when:
+    - ocp_apply_manifests | bool
+    - ocp_install_complete_job is defined
+    - ocp_install_complete_job.ansible_job_id is defined
+
+- name: Fetch install-complete log to CPAT
+  ansible.builtin.fetch:
+    src: "{{ ocp_install_dir }}/install-complete.log"
+    dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-install-complete.log"
+    flat: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  failed_when: false
+  when: ocp_apply_manifests | bool
+
+- name: Display installation result
+  ansible.builtin.debug:
+    msg: "{{ ocp_install_complete_result.stdout_lines | default(['Install wait skipped — generate mode']) }}"
+
+- name: Fail if installation did not complete
+  ansible.builtin.fail:
+    msg: "OCP installation did not complete successfully — see install-complete.log for details"
+  when:
+    - ocp_apply_manifests | bool
+    - ocp_install_complete_result is defined
+    - ocp_install_complete_result.rc | default(1) | int != 0
+
+# --- Fetch cluster credentials back to CPAT ---
+- name: Fetch kubeconfig from bastion
+  ansible.builtin.fetch:
+    src: "{{ ocp_install_dir }}/auth/kubeconfig"
+    dest: "{{ ocp_manifest_dir }}/kubeconfig"
+    flat: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  failed_when: false
+  when: ocp_apply_manifests | bool
+
+- name: Fetch kubeadmin-password from bastion
+  ansible.builtin.fetch:
+    src: "{{ ocp_install_dir }}/auth/kubeadmin-password"
+    dest: "{{ ocp_manifest_dir }}/kubeadmin-password"
+    flat: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  failed_when: false
+  when: ocp_apply_manifests | bool
+
+- name: Read kubeadmin password
+  ansible.builtin.slurp:
+    src: "{{ ocp_manifest_dir }}/kubeadmin-password"
+  register: ocp_kubeadmin_pass
+  delegate_to: localhost
+  failed_when: false
+  when: ocp_apply_manifests | bool
+
+- name: OCP installation complete
+  ansible.builtin.debug:
+    msg:
+      - "OCP cluster {{ ocp_cluster_name }}.{{ ocp_base_domain }} installation complete!"
+      - "Console: https://console-openshift-console.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+      - "Kubeconfig: {{ ocp_manifest_dir }}/kubeconfig"
+      - "Kubeadmin password: {{ (ocp_kubeadmin_pass.content | default('') | b64decode | trim) | default('See kubeadmin-password file') }}"
+  when: ocp_apply_manifests | bool

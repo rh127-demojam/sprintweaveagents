@@ -1,0 +1,32 @@
+{# One NNCP per worker — VLAN interfaces derived from CIQ rhoso_networks #}
+{% set workers = rhoso_worker_nodes | default([]) %}
+{% for worker in workers %}
+---
+apiVersion: nmstate.io/v1
+kind: NodeNetworkConfigurationPolicy
+metadata:
+  name: {{ cluster_name }}-{{ worker }}-nncp
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: {{ worker }}
+  desiredState:
+    interfaces:
+{% for net in rhoso_networks %}
+{% if (net['VLAN'] | default('') | string) | length > 0 %}
+      - name: {{ net['Network Name'] }}
+        type: vlan
+        state: up
+        vlan:
+          base-iface: {{ rhoso_worker_iface }}
+          id: {{ net['VLAN'] | int }}
+{% if (net['CIDR'] | default('') | string) | length > 0 %}
+        ipv4:
+          enabled: true
+          dhcp: false
+{% endif %}
+{% endif %}
+{% endfor %}
+      - name: {{ rhoso_worker_iface }}
+        type: ethernet
+        state: up
+{% endfor %}

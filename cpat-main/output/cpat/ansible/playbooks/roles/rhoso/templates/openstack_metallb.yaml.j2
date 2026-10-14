@@ -1,0 +1,29 @@
+{% for net in rhoso_networks if (net['MetalLB Start'] | default('') | string) | length > 0 and (net['MetalLB End'] | default('') | string) | length > 0 %}
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: {{ net['Network Name'] }}
+  namespace: {{ rhoso_metallb_ns }}
+spec:
+  addresses:
+    - {{ net['MetalLB Start'] }}-{{ net['MetalLB End'] }}
+  autoAssign: true
+  avoidBuggyIPs: false
+  serviceAllocation:
+    namespaces:
+      - {{ rhoso_openstack_ns }}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: {{ net['Network Name'] }}
+  namespace: {{ rhoso_metallb_ns }}
+spec:
+  ipAddressPools:
+    - {{ net['Network Name'] }}
+{% else %}
+apiVersion: v1
+kind: List
+items: []
+{% endfor %}

@@ -1,0 +1,9 @@
+apiVersion: dataplane.openstack.org/v1beta1
+kind: OpenStackDataPlaneDeployment
+metadata:
+  name: {{ rhoso_deployment_name }}
+  namespace: {{ rhoso_openstack_ns }}
+spec:
+  # Triggers a single Ansible execution against listed NodeSets (Deploying RHOSO 5.7)
+  nodeSets:
+    - {{ rhoso_nodeset_name }}

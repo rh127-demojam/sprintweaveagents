@@ -1,0 +1,18 @@
+---
+# Configure MetalLB for bare-metal load balancing post-install.
+- name: Create MetalLB namespace
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} create namespace metallb-system --dry-run=client -o yaml | {{ ocp_oc_binary }} apply -f -"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  delegate_to: localhost
+  when:
+    - ocp_metallb_operator_enabled | bool
+    - ocp_apply_manifests | bool
+
+- name: MetalLB configuration placeholder
+  ansible.builtin.debug:
+    msg: >-
+      MetalLB Operator installed. Configure IPAddressPool and L2Advertisement
+      CRs for service load balancing. Use CIQ API VIP and Ingress VIP ranges.
+  when: ocp_metallb_operator_enabled | bool

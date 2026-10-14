@@ -1,0 +1,24 @@
+apiVersion: config.openshift.io/v1
+kind: ImageDigestMirrorSet
+metadata:
+  name: {{ rhoso_idms_name | replace('_', '-') }}
+spec:
+  imageDigestMirrors:
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/openshift4
+      source: quay.io/openshift-release-dev/ocp-release
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/openshift4
+      source: quay.io/openshift-release-dev/ocp-v4.0-art-dev
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/redhat
+      source: registry.redhat.io
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/{{ rhoso_mirror_osp_path }}
+      source: registry.redhat.io/rhosp-rhel9
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/{{ rhoso_mirror_osp_path }}
+      source: registry.redhat.io/openstack-beta
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/olm
+      source: registry.redhat.io/redhat

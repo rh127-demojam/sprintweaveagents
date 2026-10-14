@@ -1,0 +1,283 @@
+---
+# Boot a single node from agent ISO via Redfish Virtual Media (URI module).
+# Called by boot_nodes_from_iso.yml with `_bmc_host` set to a single host dict.
+
+- name: "{{ _bmc_host.Hostname }} — Parse BMC address"
+  ansible.builtin.set_fact:
+    _bmc_base_url: >-
+      {{ (_bmc_host['BMC Address'] | default(''))
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('/redfish/v1/.*$', '') }}
+    _bmc_system_path: >-
+      {{ (_bmc_host['BMC Address'] | default(''))
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('^https?://[^/]+', '') }}
+    _bmc_user: "{{ _bmc_host['BMC Username'] | default('admin') }}"
+    _bmc_pass: "{{ _bmc_host['BMC Password Reference'] | default('password') }}"
+
+- name: "{{ _bmc_host.Hostname }} — Display BMC info"
+  ansible.builtin.debug:
+    msg:
+      - "BMC base: {{ _bmc_base_url }}"
+      - "System:   {{ _bmc_system_path }}"
+
+# --- 1. Discover Manager ---
+- name: "{{ _bmc_host.Hostname }} — Query Redfish Managers"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}/redfish/v1/Managers"
+    method: GET
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    status_code: [200]
+  register: _managers
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "{{ _bmc_host.Hostname }} — Set manager path"
+  ansible.builtin.set_fact:
+    _manager_path: "{{ _managers.json.Members[0]['@odata.id'] }}"
+
+# --- 2. Discover VirtualMedia Cd endpoint ---
+# Try Managers path first, fall back to Systems path (sushy-tools uses Systems)
+- name: "{{ _bmc_host.Hostname }} — Query VirtualMedia via Managers"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _manager_path }}/VirtualMedia"
+    method: GET
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    status_code: [200, 404]
+  register: _vm_mgr
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "{{ _bmc_host.Hostname }} — Query VirtualMedia via Systems (fallback)"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _bmc_system_path }}/VirtualMedia"
+    method: GET
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    status_code: [200]
+  register: _vm_sys
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _vm_mgr.status | int != 200
+
+- name: "{{ _bmc_host.Hostname }} — Set VirtualMedia base path"
+  ansible.builtin.set_fact:
+    _vm_base_path: >-
+      {{ (_manager_path + '/VirtualMedia') if (_vm_mgr.status | int == 200)
+         else (_bmc_system_path + '/VirtualMedia') }}
+
+- name: "{{ _bmc_host.Hostname }} — Set VirtualMedia Cd path"
+  ansible.builtin.set_fact:
+    _vm_cd_path: "{{ _vm_base_path }}/Cd"
+
+- name: "{{ _bmc_host.Hostname }} — Display discovered endpoints"
+  ansible.builtin.debug:
+    msg:
+      - "Manager:      {{ _manager_path }}"
+      - "System:       {{ _bmc_system_path }}"
+      - "VirtualMedia: {{ _vm_cd_path }}"
+
+# --- 3. Eject any existing virtual media ---
+- name: "{{ _bmc_host.Hostname }} — Eject existing virtual media"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _vm_cd_path }}/Actions/VirtualMedia.EjectMedia"
+    method: POST
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body: {}
+    status_code: [200, 204, 400, 404]
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "{{ _bmc_host.Hostname }} — Pause after eject"
+  ansible.builtin.pause:
+    seconds: 2
+
+# --- 4. Insert agent ISO via Virtual Media ---
+- name: "{{ _bmc_host.Hostname }} — Insert agent ISO (downloading ~1.3 GB — may take several minutes)"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _vm_cd_path }}/Actions/VirtualMedia.InsertMedia"
+    method: POST
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 600
+    body_format: json
+    body:
+      Image: "{{ _iso_url }}"
+      Inserted: true
+      WriteProtected: true
+    status_code: [200, 204]
+  register: _insert_result
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "{{ _bmc_host.Hostname }} — ISO inserted"
+  ansible.builtin.debug:
+    msg: "InsertMedia OK (HTTP {{ _insert_result.status }})"
+
+# --- 5. Set boot override to Cd (one-time) ---
+- name: "{{ _bmc_host.Hostname }} — Set boot source to Cd"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _bmc_system_path }}"
+    method: PATCH
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body:
+      Boot:
+        BootSourceOverrideTarget: Cd
+        BootSourceOverrideEnabled: Once
+    status_code: [200, 204]
+  register: _boot_override
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "{{ _bmc_host.Hostname }} — Boot override set"
+  ansible.builtin.debug:
+    msg: "Boot override to Cd (HTTP {{ _boot_override.status }})"
+
+# --- 6. Check power state, then power on / restart ---
+- name: "{{ _bmc_host.Hostname }} — Query current power state"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _bmc_system_path }}"
+    method: GET
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    status_code: [200]
+  register: _system_state
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "{{ _bmc_host.Hostname }} — Set power state fact"
+  ansible.builtin.set_fact:
+    _power_state: "{{ _system_state.json.PowerState | default('Off') }}"
+
+- name: "{{ _bmc_host.Hostname }} — Display power state"
+  ansible.builtin.debug:
+    msg: "Current power state: {{ _power_state }}"
+
+- name: "{{ _bmc_host.Hostname }} — Power On (node is Off)"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _bmc_system_path }}/Actions/ComputerSystem.Reset"
+    method: POST
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body:
+      ResetType: "On"
+    status_code: [200, 204]
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _power_state != 'On'
+
+- name: "{{ _bmc_host.Hostname }} — ForceRestart (node is already On)"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _bmc_system_path }}/Actions/ComputerSystem.Reset"
+    method: POST
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body:
+      ResetType: ForceRestart
+    status_code: [200, 204]
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: _power_state == 'On'
+
+# --- 7. Set permanent boot to Hdd so reboot after disk-write goes to disk ---
+- name: "{{ _bmc_host.Hostname }} — Pause 5s before setting Hdd boot"
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: "{{ _bmc_host.Hostname }} — Set permanent boot to Hdd"
+  ansible.builtin.uri:
+    url: "{{ _bmc_base_url }}{{ _bmc_system_path }}"
+    method: PATCH
+    user: "{{ _bmc_user }}"
+    password: "{{ _bmc_pass }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body:
+      Boot:
+        BootSourceOverrideTarget: Hdd
+        BootSourceOverrideEnabled: Continuous
+    status_code: [200, 204, 400]
+  register: _hdd_boot
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: "{{ _bmc_host.Hostname }} — Boot initiated"
+  ansible.builtin.debug:
+    msg: "{{ _bmc_host.Hostname }} ({{ _bmc_host.Role }}) boot from agent ISO initiated ✓ — Hdd boot set for next reboot"

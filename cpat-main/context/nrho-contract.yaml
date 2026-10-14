@@ -1,0 +1,131 @@
+# NRHO / CPAT contract — site-agnostic
+# Agents MUST ground NRHO automation claims in this file and/or an @-referenced CPAT tree.
+# Do NOT encode customer, site, or single-MoP names here. MoPs belong in input/ only.
+
+product:
+  name: NRHO
+  description: >-
+    Nokia Red Hat OpenShift delivery automation via CPAT (Cloud Platform Automation Tool).
+    SprintWeave does not rebuild the container image; it normalizes MoPs and maps them to CPAT.
+
+cpat:
+  image_default: "cpat:v1.2"
+  container_default: "cpat"
+  host_port_default: 8080          # live NRHO CPAT nginx; not privileged 80
+  container_port: 8080
+  bringup: "bringup.sh"
+  dockerfile: "Dockerfile"
+  runtime_preference: ["podman", "docker"]
+  url: "http://localhost:${host_port}"
+  # Default login is environment-specific — never print real secrets; use placeholders.
+  login_placeholder: "admin / <from site runbook or vault>"
+  env:
+    - CPAT_IMAGE
+    - CPAT_CONTAINER
+    - CPAT_PORT
+    - CPAT_NETWORK   # set to host for bastion ATP SSH
+    - CPAT_LISTEN_PORT
+
+# How NRHO gets a running CPAT container vs RHOSO scaffold.
+# RHOSO Deployment Engineer FRESH mode *writes* Dockerfile/bringup under sprintweave-output/cpat/.
+# NRHO default: copy @cpat into sprintweave-output on nrho-cpat-delivery; do not patch the original tree.
+container_strategy:
+  rhoso_parity: >-
+    Same image shape (multi-stage Node frontend + Python/Nginx runtime, bringup.sh).
+    Difference: NRHO Delivery copies @cpat into sprintweave-output and applies MoP deltas; RHOSO can generate a greenfield scaffold.
+  modes:
+    - id: run-existing
+      label: Run existing image
+      when: Image cpat:v1.2 (or CPAT_IMAGE) already present locally or pulled
+      command: "./bringup.sh"
+    - id: delivery-copy
+      label: Copy @cpat and apply MoP deltas
+      when: nrho-cpat-delivery with @cpat attached
+      command: "Copy tree to sprintweave-output/nrho-cpat-<id>/ then ./bringup.sh --build from the copy"
+      source: "@cpat (read-only source) + input/ MoP"
+    - id: build-from-tree
+      label: Build from @cpat Dockerfile
+      when: "@cpat tree with Dockerfile is available; image missing or --build/--restart requested"
+      command: "./bringup.sh --build   # or --restart"
+      source: "@cpat Dockerfile, @cpat bringup.sh, @cpat README.md"
+    - id: bastion-host-net
+      label: Bastion / ATP host network
+      when: ATP must SSH to management IP; port 80 busy or blocked
+      command: "CPAT_NETWORK=host ./bringup.sh"
+      notes: "-p is ignored; nginx binds CPAT_PORT (default 8080) on the host namespace"
+    - id: publish-quay
+      label: Publish image to registry
+      when: User explicitly asks to publish; @cpat/scripts/publish_cpat_quay.sh present
+      command: "./scripts/publish_cpat_quay.sh <version>"
+      source: "@cpat/scripts/PUBLISH_QUAY.md"
+    - id: scaffold-fresh
+      label: Generate new CPAT codebase
+      when: User explicitly asks to scaffold/enhance (rare for NRHO)
+      notes: Hand off to RHOSO Deployment Engineer patterns — do not invent a second NRHO scaffold
+  do_not:
+    - Patch the user's original @cpat (delivery never writes there)
+    - Finish nrho-cpat-delivery with docs-only / nrho-cpat-patch and no output tree
+    - Leave MoP-not-in-CPAT implement/extend deltas as ansible debug reminders when the MoP has executable steps
+    - Document host port 80 as the NRHO default (live image listens on 8080)
+    - Print real Quay passwords or UI passwords from bringup.sh echo text
+
+# Generic AIQ workbook fields for Register (site-agnostic). Not a live CPAT schema.
+# Live schema: latest @cpat create_sample_ciq.py / ciq_parser.py.
+# No code: context/templates/nrho-aiq/ sample generator.
+# Values in samples are placeholders only — never real cluster names, IPs, or secrets.
+aiq_fields:
+  - { id: cluster_name, required: true, type: string, description: "Logical cluster identifier" }
+  - { id: cluster_role, required: true, type: enum, description: "hub | workload | both", values: ["hub", "workload", "both"] }
+  - { id: nrho_release, required: true, type: string, description: "NRHO product release (from MoP identity)" }
+  - { id: aiq_workbook_path, required: true, type: path, description: "Path to AIQ workbook to upload in CPAT Register" }
+  - { id: kubeconfig_path, required: true, type: path, description: "Path reference only — never embed kubeconfig contents" }
+  - { id: pull_secret_path, required: false, type: path, description: "Path reference to pull secret file if required by design" }
+  - { id: proxy_required, required: false, type: boolean, description: "Whether workload-post proxy cache applies" }
+  - { id: mtu_required, required: false, type: boolean, description: "Whether cluster MTU change is required by design" }
+  - { id: design_mtu, required: false, type: string, description: "Design MTU when mtu_required is true — [INSERT] if unknown" }
+
+modes:
+  - id: register
+    label: Register
+    description: Register cluster / upload CIQ-AIQ and required files
+  - id: hub
+    label: Hub
+    description: Hub cluster post-deploy and Hub-side GitOps / ACM tasks
+  - id: workload
+    label: Workload
+    description: CWL / CMWL workload deploy, post tasks, CGU waits
+  - id: atp
+    label: ATP
+    description: Health / DVTS / validation suites exposed in CPAT ATP UI
+
+# Canonical CPAT capability catalog (generic). When @cpat is available, prefer live UI/task
+# names from the codebase over this list. Status mapping uses Present | Partial | Not Covered | N/A.
+cpat_capabilities:
+  - { id: "bringup", mode: "ops", label: "Container bring-up (build/run/stop)" }
+  - { id: "register", mode: "register", label: "Cluster registration / input upload" }
+  - { id: "hub-deploy-verify", mode: "hub", label: "Hub deployment and verification" }
+  - { id: "hub-post", mode: "hub", label: "Hub post tasks (users, GitOps, backup, Quay/ITMS)" }
+  - { id: "workload-deploy-verify", mode: "workload", label: "Workload cluster deploy and verification" }
+  - { id: "workload-post", mode: "workload", label: "Workload post tasks (MTU, BFD, users, proxy, CNF, CGU)" }
+  - { id: "atp-health", mode: "atp", label: "Cluster health / OC CLI validation" }
+  - { id: "atp-ncphwct", mode: "atp", label: "NCPHWCT / DVTS-style test execution" }
+  - { id: "atp-stub", mode: "atp", label: "ATP pre/post installation validation (may be stub)" }
+
+coverage_statuses:
+  - Present      # MoP step has a clear CPAT UI/task or Ansible path
+  - Partial      # CPAT covers only part of the MoP intent
+  - Not Covered  # Manual / external; no CPAT task
+  - N/A          # Not applicable to this cluster role or engagement
+
+markers:
+  gap: "[GAP]"
+  inferred: "[INFERRED]"
+  unverified: "[UNVERIFIED]"
+
+rules:
+  - Never invent CPAT UI tasks or Ansible roles not evidenced in nrho-contract, @cpat, or an input coverage workbook
+  - Never scaffold a new CPAT codebase unless the user explicitly asks for scaffold/enhance
+  - Never include real secrets, passwords, kubeconfigs, or pull-secret contents — path references only
+  - MoP documents in input/ are interchangeable; treat every MoP with the same output schema
+  - If MoP detail is missing, mark [GAP] and prefer CPAT contract over guessing
+  - Customer/site names may appear in outputs only when present in the source MoP

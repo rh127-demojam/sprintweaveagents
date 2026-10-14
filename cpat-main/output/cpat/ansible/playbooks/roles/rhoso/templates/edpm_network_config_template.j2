@@ -1,0 +1,182 @@
+{#
+  CPAT → EDPM meta-template
+  ==========================
+  This Ansible Jinja2 template GENERATES the value of
+  ansibleVars.edpm_network_config_template for OpenStackDataPlaneNodeSet
+  entirely from CIQ parameters (rhoso_edpm_network_config).
+
+  - Outer pass (Ansible / CPAT): substitutes CIQ-driven parameters
+    (topology, bridge name, NIC names, bond options, DHCP flags, …).
+  - Inner pass (EDPM on the data plane): evaluates the emitted Jinja
+    (ctlplane_mtu, nodeset_networks, networks_lower, *_vlan_id, …).
+
+  Supported topologies (no custom Jinja upload):
+    single_nic_vlans | dual_nic_bond | ovs_bond | linux_bond | ovs_dpdk
+
+  Reference:
+    Deploying RHOSO 18.0 Ch.5 / Configuring networking services Ch.4
+#}
+---
+{% raw %}
+{% set mtu_list = [ctlplane_mtu] %}
+{% for network in nodeset_networks %}
+{{ mtu_list.append(lookup('vars', networks_lower[network] ~ '_mtu')) }}
+{%- endfor %}
+{% set min_viable_mtu = mtu_list | max %}
+network_config:
+{% endraw %}
+{% if rhoso_edpm_net_topology == 'single_nic_vlans' %}
+- type: {{ rhoso_edpm_bridge_type }}
+  name: {{ rhoso_physical_bridge_name }}
+{% raw %}
+  mtu: {{ min_viable_mtu }}
+  use_dhcp: {% endraw %}{{ rhoso_edpm_use_dhcp | bool | ternary('true', 'false') }}{% raw %}
+  use_dhcpv6: {% endraw %}{{ rhoso_edpm_use_dhcpv6 | bool | ternary('true', 'false') }}{% raw %}
+  dns_servers: {{ ctlplane_dns_nameservers }}
+  domain: {{ dns_search_domains }}
+  addresses:
+  - ip_netmask: {{ ctlplane_ip }}/{{ ctlplane_cidr }}
+  routes: {{ ctlplane_host_routes }}
+  members:
+  - type: interface
+    name: {% endraw %}{{ rhoso_edpm_nic1_name }}{% raw %}
+    mtu: {{ min_viable_mtu }}
+    primary: true
+{% for network in nodeset_networks %}
+  - type: vlan
+    mtu: {{ lookup('vars', networks_lower[network] ~ '_mtu') }}
+    vlan_id: {{ lookup('vars', networks_lower[network] ~ '_vlan_id') }}
+    addresses:
+    - ip_netmask: {{ lookup('vars', networks_lower[network] ~ '_ip') }}/{{ lookup('vars', networks_lower[network] ~ '_cidr') }}
+    routes: {{ lookup('vars', networks_lower[network] ~ '_host_routes') }}
+{% endfor %}
+{% endraw %}
+{% elif rhoso_edpm_net_topology in ['dual_nic_bond', 'ovs_bond'] %}
+- type: {{ rhoso_edpm_bridge_type }}
+  name: {{ rhoso_physical_bridge_name }}
+{% raw %}
+  mtu: {{ min_viable_mtu }}
+  use_dhcp: {% endraw %}{{ rhoso_edpm_use_dhcp | bool | ternary('true', 'false') }}{% raw %}
+  use_dhcpv6: {% endraw %}{{ rhoso_edpm_use_dhcpv6 | bool | ternary('true', 'false') }}{% raw %}
+  dns_servers: {{ ctlplane_dns_nameservers }}
+  domain: {{ dns_search_domains }}
+  addresses:
+  - ip_netmask: {{ ctlplane_ip }}/{{ ctlplane_cidr }}
+  routes: {{ ctlplane_host_routes }}
+  members:
+  - type: {% endraw %}{{ rhoso_edpm_bond_type }}{% raw %}
+    name: {% endraw %}{{ rhoso_edpm_bond_name }}{% raw %}
+    mtu: {{ min_viable_mtu }}
+    bonding_options: "{% endraw %}{{ rhoso_edpm_bonding_options }}{% raw %}"
+    members:
+    - type: interface
+      name: {% endraw %}{{ rhoso_edpm_nic1_name }}{% raw %}
+      mtu: {{ min_viable_mtu }}
+      primary: true
+    - type: interface
+      name: {% endraw %}{{ rhoso_edpm_nic2_name }}{% raw %}
+      mtu: {{ min_viable_mtu }}
+{% for network in nodeset_networks %}
+  - type: vlan
+    mtu: {{ lookup('vars', networks_lower[network] ~ '_mtu') }}
+    vlan_id: {{ lookup('vars', networks_lower[network] ~ '_vlan_id') }}
+    addresses:
+    - ip_netmask: {{ lookup('vars', networks_lower[network] ~ '_ip') }}/{{ lookup('vars', networks_lower[network] ~ '_cidr') }}
+    routes: {{ lookup('vars', networks_lower[network] ~ '_host_routes') }}
+{% endfor %}
+{% endraw %}
+{% elif rhoso_edpm_net_topology == 'linux_bond' %}
+- type: linux_bond
+  name: {{ rhoso_edpm_bond_name }}
+  bonding_options: "{{ rhoso_edpm_bonding_options }}"
+{% raw %}
+  mtu: {{ min_viable_mtu }}
+  use_dhcp: {% endraw %}{{ rhoso_edpm_use_dhcp | bool | ternary('true', 'false') }}{% raw %}
+  use_dhcpv6: {% endraw %}{{ rhoso_edpm_use_dhcpv6 | bool | ternary('true', 'false') }}{% raw %}
+  dns_servers: {{ ctlplane_dns_nameservers }}
+  domain: {{ dns_search_domains }}
+  addresses:
+  - ip_netmask: {{ ctlplane_ip }}/{{ ctlplane_cidr }}
+  routes: {{ ctlplane_host_routes }}
+  members:
+  - type: interface
+    name: {% endraw %}{{ rhoso_edpm_nic1_name }}{% raw %}
+    primary: true
+  - type: interface
+    name: {% endraw %}{{ rhoso_edpm_nic2_name }}{% raw %}
+{% for network in nodeset_networks %}
+- type: vlan
+  device: {% endraw %}{{ rhoso_edpm_bond_name }}{% raw %}
+  mtu: {{ lookup('vars', networks_lower[network] ~ '_mtu') }}
+  vlan_id: {{ lookup('vars', networks_lower[network] ~ '_vlan_id') }}
+  addresses:
+  - ip_netmask: {{ lookup('vars', networks_lower[network] ~ '_ip') }}/{{ lookup('vars', networks_lower[network] ~ '_cidr') }}
+  routes: {{ lookup('vars', networks_lower[network] ~ '_host_routes') }}
+{% endfor %}
+{% endraw %}
+{% elif rhoso_edpm_net_topology == 'ovs_dpdk' %}
+- type: ovs_user_bridge
+  name: {{ rhoso_physical_bridge_name }}
+{% raw %}
+  use_dhcp: false
+  members:
+  - type: ovs_dpdk_bond
+    name: {% endraw %}{{ rhoso_edpm_bond_name }}{% raw %}
+    mtu: {% endraw %}{{ rhoso_edpm_dpdk_mtu }}{% raw %}
+    rx_queue: {% endraw %}{{ rhoso_edpm_dpdk_rx_queue }}{% raw %}
+    ovs_extra: "{% endraw %}{{ rhoso_edpm_dpdk_ovs_extra }}{% raw %}"
+    members:
+    - type: ovs_dpdk_port
+      name: dpdk0
+      members:
+      - type: interface
+        name: {% endraw %}{{ rhoso_edpm_nic1_name }}{% raw %}
+    - type: ovs_dpdk_port
+      name: dpdk1
+      members:
+      - type: interface
+        name: {% endraw %}{{ rhoso_edpm_nic2_name }}{% raw %}
+{% for network in nodeset_networks %}
+  - type: vlan
+    vlan_id: {{ lookup('vars', networks_lower[network] ~ '_vlan_id') }}
+    mtu: {{ lookup('vars', networks_lower[network] ~ '_mtu') }}
+    addresses:
+    - ip_netmask: {{ lookup('vars', networks_lower[network] ~ '_ip') }}/{{ lookup('vars', networks_lower[network] ~ '_cidr') }}
+{% endfor %}
+{% endraw %}
+{% else %}
+{# Fallback: dual_nic_bond style (Deploying RHOSO Ch.5 default example) #}
+- type: {{ rhoso_edpm_bridge_type }}
+  name: {{ rhoso_physical_bridge_name }}
+{% raw %}
+  mtu: {{ min_viable_mtu }}
+  use_dhcp: false
+  use_dhcpv6: false
+  dns_servers: {{ ctlplane_dns_nameservers }}
+  domain: {{ dns_search_domains }}
+  addresses:
+  - ip_netmask: {{ ctlplane_ip }}/{{ ctlplane_cidr }}
+  routes: {{ ctlplane_host_routes }}
+  members:
+  - type: linux_bond
+    name: {% endraw %}{{ rhoso_edpm_bond_name }}{% raw %}
+    mtu: {{ min_viable_mtu }}
+    bonding_options: "{% endraw %}{{ rhoso_edpm_bonding_options }}{% raw %}"
+    members:
+    - type: interface
+      name: {% endraw %}{{ rhoso_edpm_nic1_name }}{% raw %}
+      mtu: {{ min_viable_mtu }}
+      primary: true
+    - type: interface
+      name: {% endraw %}{{ rhoso_edpm_nic2_name }}{% raw %}
+      mtu: {{ min_viable_mtu }}
+{% for network in nodeset_networks %}
+  - type: vlan
+    mtu: {{ lookup('vars', networks_lower[network] ~ '_mtu') }}
+    vlan_id: {{ lookup('vars', networks_lower[network] ~ '_vlan_id') }}
+    addresses:
+    - ip_netmask: {{ lookup('vars', networks_lower[network] ~ '_ip') }}/{{ lookup('vars', networks_lower[network] ~ '_cidr') }}
+    routes: {{ lookup('vars', networks_lower[network] ~ '_host_routes') }}
+{% endfor %}
+{% endraw %}
+{% endif %}

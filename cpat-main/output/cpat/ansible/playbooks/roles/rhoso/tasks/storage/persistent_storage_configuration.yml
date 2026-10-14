@@ -1,0 +1,143 @@
+﻿---
+# Configuring persistent storage for RHOSO 18.0
+# Ensures RHOCP StorageClass is usable by OpenStackControlPlane / service PVCs
+# v1.4: Includes LSO LocalVolumeDiscovery + LocalVolumeSet when LSO enabled
+
+- name: Persistent storage — document backends
+  ansible.builtin.debug:
+    msg:
+      - "Persistent Storage Configuration"
+      - "Reference: Configuring persistent storage (RHOSO 18.0)"
+      - "CIQ Storage Class={{ rhoso_storage_class }}"
+      - "CIQ Storage Backend={{ rhoso_storage_backend }}"
+      - "LSO Enabled={{ rhoso_lso_enabled | bool }}"
+      - "Trident Enabled={{ rhoso_trident_enabled | bool }}"
+      - "Used by OpenStackControlPlane.spec.storageClass and service PVCs"
+      - "(Galera, RabbitMQ, Glance, OVN DBs, Telemetry, etc.)"
+
+- name: Persistent storage — require Storage Class
+  ansible.builtin.assert:
+    that:
+      - rhoso_storage_class | length > 0
+    fail_msg: Set 'Storage Class' in rhoso_details.
+
+- name: Persistent storage — verify StorageClass on cluster
+  ansible.builtin.command:
+    cmd: oc get storageclass {{ rhoso_storage_class }} -o yaml
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_sc_yaml
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Persistent storage — check default StorageClass annotation
+  ansible.builtin.command:
+    cmd: >-
+      oc get storageclass {{ rhoso_storage_class }}
+      -o jsonpath={.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_sc_default
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Persistent storage — list PVCs that may already exist in openstack ns
+  ansible.builtin.command:
+    cmd: oc get pvc -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_pvc_list
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+# ---------------------------------------------------------------------------
+# LSO — LocalVolumeDiscovery + LocalVolumeSet (v1.4)
+# Reference: JIO D0.6_LSO/ — automatic local device provisioning
+# ---------------------------------------------------------------------------
+
+- name: LSO — apply LocalVolumeDiscovery CR
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: local.storage.openshift.io/v1alpha1
+    kind: LocalVolumeDiscovery
+    metadata:
+      name: auto-discover-devices
+      namespace: {{ rhoso_lso_namespace }}
+    spec:
+      nodeSelector:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: {{ rhoso_lso_node_selector_label }}
+                operator: Exists
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_lso_discovery
+  changed_when: "'created' in rhoso_lso_discovery.stdout or 'configured' in rhoso_lso_discovery.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_lso_enabled | bool
+
+- name: LSO — apply LocalVolumeSet CR
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: local.storage.openshift.io/v1alpha1
+    kind: LocalVolumeSet
+    metadata:
+      name: local-volume-set
+      namespace: {{ rhoso_lso_namespace }}
+    spec:
+      nodeSelector:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: {{ rhoso_lso_node_selector_label }}
+                operator: Exists
+      storageClassName: {{ rhoso_lso_storage_class }}
+      volumeMode: {{ rhoso_lso_volume_mode }}
+      deviceInclusionSpec:
+        deviceTypes:
+{% for dtype in rhoso_lso_device_types.split(',') %}
+          - {{ dtype | trim }}
+{% endfor %}
+        deviceMechanicalProperties:
+          - {{ rhoso_lso_device_mechanical }}
+{% if (rhoso_lso_min_size | default('') | string) | length > 0 %}
+        minSize: {{ rhoso_lso_min_size }}
+{% endif %}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_lso_volset
+  changed_when: "'created' in rhoso_lso_volset.stdout or 'configured' in rhoso_lso_volset.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_lso_enabled | bool
+
+- name: LSO — verify LocalVolumeDiscovery
+  ansible.builtin.command:
+    cmd: oc get localvolumediscovery -n {{ rhoso_lso_namespace }}
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_lso_enabled | bool
+
+- name: Persistent storage — summary / next steps
+  ansible.builtin.debug:
+    msg:
+      - "StorageClass '{{ rhoso_storage_class }}' is available"
+      - "is-default-class={{ rhoso_sc_default.stdout | default('unset') }}"
+      - "LSO: {{ rhoso_lso_enabled | bool | ternary('LocalVolumeDiscovery + LocalVolumeSet applied', 'skipped') }}"
+      - "Backend guidance: ODF/Ceph, LVM, NFS, LSO, Trident, or external Red Hat Ceph Storage 7/8/9"
+      - "Configure Cinder/Glance backends during Control Plane Customization if needed"
+      - "Existing PVCs: {{ rhoso_pvc_list.stdout_lines | default(['(namespace may not exist yet)']) }}"

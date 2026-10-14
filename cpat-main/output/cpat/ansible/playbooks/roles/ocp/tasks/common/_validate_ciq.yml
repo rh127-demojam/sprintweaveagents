@@ -1,0 +1,335 @@
+---
+# Validate every OCP CIQ field against Python-defined types / regexp patterns.
+# Collects ALL failures, then fails once with a combined message.
+# Schema source: ansible/module_utils/ocp_ciq_schema.py (via get_ocp_ciq_validation_schema).
+#
+# Expects facts from _load_ciq_context.yml:
+#   ocp_ciq, ocp_bmc_hosts, ocp_nmstate_interfaces, ocp_compute_nodes,
+#   ocp_dns_records, ocp_is_disconnected, ocp_is_abi, ocp_is_sno, ocp_is_ipi
+
+- name: Load OCP CIQ validation schema (Python types + regexp patterns)
+  get_ocp_ciq_validation_schema:
+  register: ocp_ciq_schema_mod
+  delegate_to: localhost
+  run_once: true
+
+- name: Set OCP CIQ validation schema fact
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_schema: "{{ ocp_ciq_schema_mod.schema }}"
+    ocp_ciq_validation_errors: []
+
+- name: OCP CIQ validation — document scope
+  ansible.builtin.debug:
+    msg:
+      - "OCP CIQ field validation schema v{{ ocp_ciq_validation_schema.schema_version }}"
+      - "Parameters: {{ ocp_ciq_validation_schema.parameters | length }}"
+      - "BMC host fields/row: {{ ocp_ciq_validation_schema.bmc_host_fields | length }}"
+      - "NMState fields/row: {{ ocp_ciq_validation_schema.nmstate_fields | length }}"
+      - "DNS record fields/row: {{ ocp_ciq_validation_schema.dns_record_fields | length }}"
+      - "BMC hosts in CIQ: {{ ocp_bmc_hosts | default([]) | length }}"
+      - "NMState interfaces in CIQ: {{ ocp_nmstate_interfaces | default([]) | length }}"
+      - "DNS records in CIQ: {{ ocp_dns_records | default([]) | length }}"
+      - "Install method={{ ocp_install_method | default('') }} disconnected={{ ocp_is_disconnected | default(false) }}"
+
+# ---------------------------------------------------------------------------
+# Parameter validation — collect all failures
+# ---------------------------------------------------------------------------
+
+- name: OCP CIQ validation — collect required-parameter failures
+  vars:
+    _field: "{{ item }}"
+    _value: "{{ ocp_ciq[_field.name] | default('') | string | trim }}"
+    _err: >-
+      [parameter] '{{ _field.name }}' (table={{ _field.table }}, type={{ _field.type }},
+      when={{ _field.when | default('always') }}) is required but empty
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_ciq_validation_schema.parameters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.required | default(false) | bool
+    - (ocp_ciq[item.name] | default('') | string | trim | length) == 0
+    - >
+      (item.when | default('always') == 'always')
+      or (item.when == 'disconnected' and (ocp_is_disconnected | default(false) | bool))
+      or (item.when == 'abi' and (ocp_is_abi | default(false) | bool))
+      or (item.when == 'sno' and (ocp_is_sno | default(false) | bool))
+
+- name: OCP CIQ validation — collect parameter pattern failures
+  vars:
+    _field: "{{ item }}"
+    _value: "{{ ocp_ciq[_field.name] | default('') | string | trim }}"
+    _err: >-
+      [parameter] '{{ _field.name }}' (table={{ _field.table }}, type={{ _field.type }})
+      value '{{ _value }}' does not match pattern {{ _field.pattern }}
+      ({{ _field.description | default('') }})
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_ciq_validation_schema.parameters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - (ocp_ciq[item.name] | default('') | string | trim | length) > 0
+    - not ((ocp_ciq[item.name] | default('') | string | trim) is match(item.pattern))
+
+# ---------------------------------------------------------------------------
+# BMC hosts validation
+# ---------------------------------------------------------------------------
+
+- name: OCP CIQ validation — collect empty BMC hosts failure (ABI)
+  vars:
+    _err: >-
+      [bmc_hosts] Agent-based install ({{ ocp_install_method }}) requires at least
+      {{ ocp_ciq_validation_schema.rules.bmc_hosts_min_count_abi }} BMC host row(s).
+      Found: {{ ocp_bmc_hosts | default([]) | length }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  when:
+    - ocp_is_abi | default(false) | bool
+    - >
+      (ocp_bmc_hosts is not defined)
+      or (ocp_bmc_hosts is not sequence)
+      or ((ocp_bmc_hosts | length) < (ocp_ciq_validation_schema.rules.bmc_hosts_min_count_abi | int))
+
+- name: OCP CIQ validation — collect required BMC host field failures
+  vars:
+    _host: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _host[_field.name] | default('') | string | trim }}"
+    _hostname: "{{ _host['Hostname'] | default('unnamed') }}"
+    _err: >-
+      [bmc_host:{{ _hostname }}] required field '{{ _field.name }}'
+      (type={{ _field.type }}) is empty
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_bmc_hosts | default([]) | product(ocp_ciq_validation_schema.bmc_host_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Hostname'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (ocp_bmc_hosts | default([]) | length) > 0
+    - item.1.required | default(false) | bool
+    - (item.0[item.1.name] | default('') | string | trim | length) == 0
+
+- name: OCP CIQ validation — collect BMC host field pattern failures
+  vars:
+    _host: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _host[_field.name] | default('') | string | trim }}"
+    _hostname: "{{ _host['Hostname'] | default('unnamed') }}"
+    _err: >-
+      [bmc_host:{{ _hostname }}] field '{{ _field.name }}' (type={{ _field.type }})
+      value '{{ _value }}' does not match pattern {{ _field.pattern }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_bmc_hosts | default([]) | product(ocp_ciq_validation_schema.bmc_host_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Hostname'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (ocp_bmc_hosts | default([]) | length) > 0
+    - (item.0[item.1.name] | default('') | string | trim | length) > 0
+    - not ((item.0[item.1.name] | default('') | string | trim) is match(item.1.pattern))
+
+# ---------------------------------------------------------------------------
+# NMState interfaces validation
+# ---------------------------------------------------------------------------
+
+- name: OCP CIQ validation — collect empty NMState failure (ABI)
+  vars:
+    _err: >-
+      [nmstate] Agent-based install ({{ ocp_install_method }}) requires at least
+      {{ ocp_ciq_validation_schema.rules.nmstate_min_count_abi }} NMState interface row(s).
+      Found: {{ ocp_nmstate_interfaces | default([]) | length }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  when:
+    - ocp_is_abi | default(false) | bool
+    - >
+      (ocp_nmstate_interfaces is not defined)
+      or (ocp_nmstate_interfaces is not sequence)
+      or ((ocp_nmstate_interfaces | length) < (ocp_ciq_validation_schema.rules.nmstate_min_count_abi | int))
+
+- name: OCP CIQ validation — collect required NMState field failures
+  vars:
+    _iface: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _iface[_field.name] | default('') | string | trim }}"
+    _hostname: "{{ _iface['Hostname'] | default('unnamed') }}"
+    _err: >-
+      [nmstate:{{ _hostname }}/{{ _iface['Interface Name'] | default('?') }}] required field '{{ _field.name }}'
+      (type={{ _field.type }}) is empty
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_nmstate_interfaces | default([]) | product(ocp_ciq_validation_schema.nmstate_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Hostname'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (ocp_nmstate_interfaces | default([]) | length) > 0
+    - item.1.required | default(false) | bool
+    - (item.0[item.1.name] | default('') | string | trim | length) == 0
+
+- name: OCP CIQ validation — collect NMState field pattern failures
+  vars:
+    _iface: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _iface[_field.name] | default('') | string | trim }}"
+    _hostname: "{{ _iface['Hostname'] | default('unnamed') }}"
+    _err: >-
+      [nmstate:{{ _hostname }}/{{ _iface['Interface Name'] | default('?') }}] field '{{ _field.name }}'
+      (type={{ _field.type }}) value '{{ _value }}' does not match pattern {{ _field.pattern }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_nmstate_interfaces | default([]) | product(ocp_ciq_validation_schema.nmstate_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Hostname'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (ocp_nmstate_interfaces | default([]) | length) > 0
+    - (item.0[item.1.name] | default('') | string | trim | length) > 0
+    - not ((item.0[item.1.name] | default('') | string | trim) is match(item.1.pattern))
+
+# ---------------------------------------------------------------------------
+# DNS records validation
+# ---------------------------------------------------------------------------
+
+- name: OCP CIQ validation — collect DNS record count failure
+  vars:
+    _err: >-
+      [dns_records] Expected at least {{ ocp_ciq_validation_schema.rules.dns_records_min_count }}
+      DNS record(s) (api, api-int, *.apps). Found: {{ ocp_dns_records | default([]) | length }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  when: >
+    (ocp_dns_records | default([]) | length) < (ocp_ciq_validation_schema.rules.dns_records_min_count | int)
+
+- name: OCP CIQ validation — collect required DNS record field failures
+  vars:
+    _rec: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _rec[_field.name] | default('') | string | trim }}"
+    _recname: "{{ _rec['Hostname'] | default(_rec['Record Name'] | default('unnamed')) }}"
+    _err: >-
+      [dns:{{ _recname }}] required field '{{ _field.name }}'
+      (type={{ _field.type }}) is empty
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_dns_records | default([]) | product(ocp_ciq_validation_schema.dns_record_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Hostname'] | default(item.0['Record Name'] | default('?')) }}.{{ item.1.name }}"
+  when:
+    - (ocp_dns_records | default([]) | length) > 0
+    - item.1.required | default(false) | bool
+    - (item.0[item.1.name] | default('') | string | trim | length) == 0
+
+- name: OCP CIQ validation — collect DNS record field pattern failures
+  vars:
+    _rec: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _rec[_field.name] | default('') | string | trim }}"
+    _recname: "{{ _rec['Hostname'] | default(_rec['Record Name'] | default('unnamed')) }}"
+    _err: >-
+      [dns:{{ _recname }}] field '{{ _field.name }}' (type={{ _field.type }})
+      value '{{ _value }}' does not match pattern {{ _field.pattern }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  loop: "{{ ocp_dns_records | default([]) | product(ocp_ciq_validation_schema.dns_record_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Hostname'] | default(item.0['Record Name'] | default('?')) }}.{{ item.1.name }}"
+  when:
+    - (ocp_dns_records | default([]) | length) > 0
+    - (item.0[item.1.name] | default('') | string | trim | length) > 0
+    - not ((item.0[item.1.name] | default('') | string | trim) is match(item.1.pattern))
+
+# ---------------------------------------------------------------------------
+# Cross-table consistency checks
+# ---------------------------------------------------------------------------
+
+- name: OCP CIQ validation — check BMC hostnames match NMState hostnames
+  vars:
+    _bmc_hostnames: "{{ ocp_bmc_hosts | default([]) | map(attribute='Hostname') | list | sort }}"
+    _nmstate_hostnames: "{{ ocp_nmstate_interfaces | default([]) | map(attribute='Hostname') | unique | list | sort }}"
+    _missing: "{{ _bmc_hostnames | difference(_nmstate_hostnames) }}"
+    _err: >-
+      [cross-table] BMC host(s) {{ _missing | join(', ') }} have no NMState interface entries.
+      Every node in ocp_bmc_hosts should have at least one NMState interface configured.
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  when:
+    - (ocp_bmc_hosts | default([]) | length) > 0
+    - (ocp_nmstate_interfaces | default([]) | length) > 0
+    - _missing | length > 0
+
+- name: OCP CIQ validation — check SNO replica counts
+  vars:
+    _cp_replicas: "{{ ocp_ciq.get('Control Plane Replicas', '3') | string | trim }}"
+    _compute_replicas: "{{ ocp_ciq.get('Compute Replicas', '2') | string | trim }}"
+    _err: >-
+      [sno] SNO requires Control Plane Replicas=1 and Compute Replicas=0.
+      Found: CP={{ _cp_replicas }}, Compute={{ _compute_replicas }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  when:
+    - ocp_is_sno | default(false) | bool
+    - (_cp_replicas != '1') or (_compute_replicas != '0')
+
+- name: OCP CIQ validation — check IPI-BM requires VIPs
+  vars:
+    _api_vip: "{{ ocp_ciq.get('API VIP', '') | string | trim }}"
+    _ingress_vip: "{{ ocp_ciq.get('Ingress VIP', '') | string | trim }}"
+    _err: >-
+      [ipi] IPI-BM requires API VIP and Ingress VIP. Found: API={{ _api_vip }}, Ingress={{ _ingress_vip }}
+  ansible.builtin.set_fact:
+    ocp_ciq_validation_errors: "{{ ocp_ciq_validation_errors + [_err] }}"
+  when:
+    - ocp_is_ipi | default(false) | bool
+    - (_api_vip | length == 0) or (_ingress_vip | length == 0)
+
+# ---------------------------------------------------------------------------
+# Final report — fail once with every collected error
+# ---------------------------------------------------------------------------
+
+- name: OCP CIQ validation — report all failed parameters / fields
+  ansible.builtin.debug:
+    msg:
+      - "OCP CIQ validation found {{ ocp_ciq_validation_errors | length }} error(s):"
+      - "{{ ocp_ciq_validation_errors }}"
+  when: (ocp_ciq_validation_errors | length) > 0
+
+- name: OCP CIQ validation — fail with complete error list
+  ansible.builtin.fail:
+    msg: |
+      OCP CIQ validation failed with {{ ocp_ciq_validation_errors | length }} error(s).
+      Fix the following parameter / field(s) and re-run:
+
+      {% for err in ocp_ciq_validation_errors %}
+      {{ loop.index }}. {{ err }}
+      {% endfor %}
+  when: (ocp_ciq_validation_errors | length) > 0
+
+- name: OCP CIQ validation — warn if Boot MAC Address is empty
+  vars:
+    _mac_missing: >-
+      {{ ocp_bmc_hosts | default([])
+         | selectattr('Boot MAC Address', 'defined')
+         | selectattr('Boot MAC Address', 'equalto', '')
+         | map(attribute='Hostname') | list }}
+    _mac_undefined: >-
+      {{ ocp_bmc_hosts | default([])
+         | rejectattr('Boot MAC Address', 'defined')
+         | map(attribute='Hostname') | list }}
+    _all_missing: "{{ _mac_missing + _mac_undefined }}"
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ _all_missing | length }} host(s) have empty Boot MAC Address:
+      {{ _all_missing | join(', ') }}.
+      MAC will be auto-discovered via Redfish when CPAT runs on the bastion
+      with BMC network access. For local testing, manifests will use empty MAC
+      placeholders.
+  when:
+    - ocp_bmc_hosts | default([]) | length > 0
+    - _all_missing | length > 0
+
+- name: OCP CIQ validation — summary
+  ansible.builtin.debug:
+    msg:
+      - "All OCP CIQ parameters, BMC hosts, NMState interfaces, and DNS records passed type/regexp validation."
+      - "Schema version: {{ ocp_ciq_validation_schema.schema_version }}"

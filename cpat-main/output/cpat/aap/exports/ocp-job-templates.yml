@@ -1,0 +1,135 @@
+# ---------------------------------------------------------------------------
+# CPAT OCP Job Templates for AAP 2.5
+# Owner: OCP Deployment Engineer (ODE-5)
+# Import: awx-manage import < ocp-job-templates.yml
+# ---------------------------------------------------------------------------
+---
+job_templates:
+
+  # =========================================================================
+  # 1. CPAT OCP Install — Single playbook, survey selects the task
+  # =========================================================================
+  - name: "CPAT OCP Install"
+    description: >-
+      Run any OCP installation task via CPAT. Select the task from the
+      survey dropdown. Supports all 26 OCP tasks: prerequisites, mirror,
+      install-config, ignition, bootstrap, cluster-config, validation,
+      and uninstall.
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/ocp_install.yml"
+    execution_environment: "CPAT EE"
+    credentials:
+      - "CPAT Bastion SSH"
+      - "CPAT BMC Credentials"
+      - "CPAT Pull Secret"
+    verbosity: 0
+    timeout: 14400
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP Installation Parameters"
+      description: "Configure the OCP installation task and cluster parameters"
+      spec:
+        - question_name: "OCP Task"
+          question_description: "Select the OCP installation task to execute"
+          variable: "ocp_task"
+          type: "multiplechoice"
+          required: true
+          default: "prerequisites"
+          choices:
+            - "generate_manifests"
+            - "prerequisites"
+            - "bastion_preparation"
+            - "dns_dhcp_validation"
+            - "ntp_sync"
+            - "mirror_registry"
+            - "oc_mirror"
+            - "idms_itms_config"
+            - "install_config"
+            - "agent_config"
+            - "nmstate_configs"
+            - "ignition_configs"
+            - "agent_iso"
+            - "boot_nodes"
+            - "bootstrap"
+            - "wait_install"
+            - "approve_csrs"
+            - "auth_config"
+            - "day2_operators"
+            - "metallb_config"
+            - "sriov_config"
+            - "health_check"
+            - "node_readiness"
+            - "uninstall_mirror_registry"
+            - "destroy_cluster"
+            - "full_install"
+        - question_name: "CIQ File Path"
+          question_description: "Absolute path to the OCP CIQ Excel workbook (.xlsx)"
+          variable: "ocp_ciq_file"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Name"
+          question_description: "OCP cluster name (must match CIQ)"
+          variable: "ocp_cluster_name"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "OCP Version"
+          question_description: "OCP version to install"
+          variable: "ocp_version"
+          type: "multiplechoice"
+          required: true
+          default: "4.20"
+          choices: ["4.17", "4.18", "4.19", "4.20", "4.22"]
+        - question_name: "Apply Manifests"
+          variable: "ocp_apply_manifests"
+          type: "multiplechoice"
+          required: true
+          default: "true"
+          choices: ["true", "false"]
+        - question_name: "Skip Generation"
+          variable: "ocp_skip_generation"
+          type: "multiplechoice"
+          required: true
+          default: "false"
+          choices: ["true", "false"]
+        - question_name: "Manifest Directory"
+          variable: "ocp_manifest_dir"
+          type: "text"
+          required: false
+          default: ""
+
+  # =========================================================================
+  # 2. CPAT OCP Validate — Registration validation
+  # =========================================================================
+  - name: "CPAT OCP Validate"
+    description: >-
+      Validate an OCP CIQ workbook — parses the CIQ, checks schema
+      compliance, validates BMC connectivity, and fetches MAC addresses.
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/ocp_validate.yml"
+    execution_environment: "CPAT EE"
+    credentials: []
+    verbosity: 0
+    timeout: 600
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP Validation Parameters"
+      description: "Validate an OCP CIQ workbook"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ocp_ciq_file"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Name"
+          variable: "ocp_cluster_name"
+          type: "text"
+          required: true
+          default: ""

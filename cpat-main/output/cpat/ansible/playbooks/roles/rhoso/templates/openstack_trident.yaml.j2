@@ -1,0 +1,63 @@
+{# NetApp Trident CSI storage resources (v1.4)
+   Renders: TridentOrchestrator + TridentBackendConfig + StorageClass + ONTAP credentials Secret
+   Source: JIO D1.3_NetApp/ artifacts (Trident-configuration.txt, TridentBackendConfig)
+   Conditional: rendered when rhoso_trident_enabled is true #}
+---
+apiVersion: trident.netapp.io/v1
+kind: TridentOrchestrator
+metadata:
+  name: trident
+  namespace: {{ rhoso_trident_namespace | default('trident') }}
+spec:
+  debug: false
+  namespace: {{ rhoso_trident_namespace | default('trident') }}
+{% if (rhoso_trident_image_registry | default('') | string) | length > 0 %}
+  imageRegistry: {{ rhoso_trident_image_registry }}
+{% endif %}
+{% if (rhoso_trident_image | default('') | string) | length > 0 %}
+  tridentImage: {{ rhoso_trident_image }}
+{% endif %}
+{% if (rhoso_trident_autosupport_image | default('') | string) | length > 0 %}
+  autosupportImage: {{ rhoso_trident_autosupport_image }}
+{% endif %}
+{% if (rhoso_trident_image_registry | default('') | string) | length > 0 %}
+  imagePullSecrets:
+    - {{ rhoso_trident_secret_name }}-pull
+{% endif %}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ rhoso_trident_secret_name }}
+  namespace: {{ rhoso_trident_namespace | default('trident') }}
+type: Opaque
+stringData:
+  username: CHANGE_ME_ONTAP_USERNAME
+  password: CHANGE_ME_ONTAP_PASSWORD
+---
+apiVersion: trident.netapp.io/v1
+kind: TridentBackendConfig
+metadata:
+  name: {{ rhoso_trident_backend_name }}
+  namespace: {{ rhoso_trident_namespace | default('trident') }}
+spec:
+  version: 1
+  storageDriverName: {{ rhoso_trident_storage_driver }}
+  managementLIF: {{ rhoso_trident_mgmt_lif }}
+{% if (rhoso_trident_data_lif | default('') | string) | length > 0 %}
+  dataLIF: {{ rhoso_trident_data_lif }}
+{% endif %}
+  svm: {{ rhoso_trident_svm }}
+  credentials:
+    name: {{ rhoso_trident_secret_name }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ rhoso_trident_storage_class }}
+provisioner: csi.trident.netapp.io
+parameters:
+  backendType: {{ rhoso_trident_storage_driver }}
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: {{ rhoso_trident_volume_binding_mode | default('Immediate') }}

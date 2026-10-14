@@ -1,0 +1,21 @@
+---
+# Generate disconnected-specific CRs (IDMS, ITMS, CatalogSource).
+- name: Generate IDMS CR
+  ansible.builtin.template:
+    src: ocp_image_content_source.yaml.j2
+    dest: "{{ ocp_manifest_dir }}/idms-{{ ocp_idms_name | default('ocp-idms') }}.yaml"
+    mode: "0644"
+  delegate_to: localhost
+  when: ocp_image_content_source_1 | default('') | length > 0
+
+- name: Generate CatalogSource CR
+  ansible.builtin.template:
+    src: ocp_catalog_source.yaml.j2
+    dest: "{{ ocp_manifest_dir }}/catalogsource-{{ ocp_catalogsource_name }}.yaml"
+    mode: "0644"
+  delegate_to: localhost
+  when: ocp_catalogsource_image | default('') | length > 0
+
+- name: Disconnected CRs generated
+  ansible.builtin.debug:
+    msg: "Generated disconnected CRs: IDMS, CatalogSource for mirror registry {{ ocp_mirror_registry_url }}"

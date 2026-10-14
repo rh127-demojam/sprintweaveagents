@@ -1,0 +1,221 @@
+---
+# Validate every CIQ field against Python-defined types / regexp patterns.
+# Collects ALL failures, then fails once with a combined message.
+# Schema source: ansible/module_utils/rhoso_ciq_schema.py (via get_ciq_validation_schema).
+#
+# Expects facts from _load_ciq_context.yml (or equivalent):
+#   rhoso_ciq, rhoso_networks, rhoso_nodes, rhoso_is_disconnected,
+#   rhoso_dp_mode, rhoso_sub_method, rhoso_edpm_net_topology
+
+- name: Load CIQ validation schema (Python types + regexp patterns)
+  get_ciq_validation_schema:
+  register: rhoso_ciq_schema_mod
+  delegate_to: localhost
+  run_once: true
+
+- name: Set CIQ validation schema fact
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_schema: "{{ rhoso_ciq_schema_mod.schema }}"
+    rhoso_ciq_validation_errors: []
+
+- name: CIQ validation — document scope
+  ansible.builtin.debug:
+    msg:
+      - "CIQ field validation schema v{{ rhoso_ciq_validation_schema.schema_version }}"
+      - "Parameters: {{ rhoso_ciq_validation_schema.parameters | length }}"
+      - "Network fields/row: {{ rhoso_ciq_validation_schema.network_fields | length }}"
+      - "Node fields/row: {{ rhoso_ciq_validation_schema.node_fields | length }}"
+      - "Networks in CIQ: {{ rhoso_networks | default([]) | length }}"
+      - "Data plane nodes in CIQ: {{ rhoso_nodes | default([]) | length }}"
+      - "Deployment mode disconnected={{ rhoso_is_disconnected | default(false) }}"
+      - "Data plane mode={{ rhoso_dp_mode | default('') }} subscription={{ rhoso_sub_method | default('') }}"
+
+# ---------------------------------------------------------------------------
+# Parameter validation — collect all failures
+# ---------------------------------------------------------------------------
+
+- name: CIQ validation — collect required-parameter failures
+  vars:
+    _field: "{{ item }}"
+    _value: "{{ rhoso_ciq[_field.name] | default('') | string | trim }}"
+    _err: >-
+      [parameter] '{{ _field.name }}' (table={{ _field.table }}, type={{ _field.type }},
+      when={{ _field.when | default('always') }}) is required but empty
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  loop: "{{ rhoso_ciq_validation_schema.parameters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.required | default(false) | bool
+    - (rhoso_ciq[item.name] | default('') | string | trim | length) == 0
+    - >
+      (item.when | default('always') == 'always')
+      or (item.when == 'disconnected' and (rhoso_is_disconnected | default(false) | bool))
+      or (item.when == 'activation_key' and (rhoso_sub_method | default('') | lower) == 'activation_key')
+      or (item.when == 'username_password' and (rhoso_sub_method | default('') | lower) == 'username_password')
+      or (item.when == 'edpm_bond' and (rhoso_edpm_net_topology | default('') | lower) in ['dual_nic_bond', 'ovs_bond', 'linux_bond'])
+      or (item.when == 'edpm_dpdk' and (rhoso_edpm_net_topology | default('') | lower) == 'ovs_dpdk')
+      or (item.when == 'pre_provisioned' and (rhoso_dp_mode | default('') | lower) == 'pre-provisioned')
+      or (item.when == 'unprovisioned' and (rhoso_dp_mode | default('') | lower) == 'unprovisioned')
+
+- name: CIQ validation — collect parameter pattern failures
+  vars:
+    _field: "{{ item }}"
+    _value: "{{ rhoso_ciq[_field.name] | default('') | string | trim }}"
+    _err: >-
+      [parameter] '{{ _field.name }}' (table={{ _field.table }}, type={{ _field.type }})
+      value '{{ _value }}' does not match pattern {{ _field.pattern }}
+      ({{ _field.description | default('') }})
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  loop: "{{ rhoso_ciq_validation_schema.parameters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - (rhoso_ciq[item.name] | default('') | string | trim | length) > 0
+    - not ((rhoso_ciq[item.name] | default('') | string | trim) is match(item.pattern))
+
+# ---------------------------------------------------------------------------
+# Network list validation — collect all failures
+# ---------------------------------------------------------------------------
+
+- name: CIQ validation — collect empty networks-list failure
+  vars:
+    _err: >-
+      [networks] rhoso_networks must be a list with at least
+      {{ rhoso_ciq_validation_schema.rules.networks_min_count }} network row(s).
+      Found: {{ rhoso_networks | default([]) | length }}
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  when: >
+    (rhoso_networks is not defined)
+    or (rhoso_networks is not sequence)
+    or ((rhoso_networks | length) < (rhoso_ciq_validation_schema.rules.networks_min_count | int))
+
+- name: CIQ validation — collect required network-field failures
+  vars:
+    _net: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _net[_field.name] | default('') | string | trim }}"
+    _net_name: "{{ _net['Network Name'] | default('unnamed') }}"
+    _err: >-
+      [network:{{ _net_name }}] required field '{{ _field.name }}'
+      (type={{ _field.type }}) is empty
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  loop: "{{ rhoso_networks | default([]) | product(rhoso_ciq_validation_schema.network_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Network Name'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (rhoso_networks | default([]) | length) > 0
+    - item.1.required | default(false) | bool
+    - (item.0[item.1.name] | default('') | string | trim | length) == 0
+
+- name: CIQ validation — collect network-field pattern failures
+  vars:
+    _net: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _net[_field.name] | default('') | string | trim }}"
+    _net_name: "{{ _net['Network Name'] | default('unnamed') }}"
+    _err: >-
+      [network:{{ _net_name }}] field '{{ _field.name }}' (type={{ _field.type }})
+      value '{{ _value }}' does not match pattern {{ _field.pattern }}
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  loop: "{{ rhoso_networks | default([]) | product(rhoso_ciq_validation_schema.network_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Network Name'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (rhoso_networks | default([]) | length) > 0
+    - (item.0[item.1.name] | default('') | string | trim | length) > 0
+    - not ((item.0[item.1.name] | default('') | string | trim) is match(item.1.pattern))
+
+# ---------------------------------------------------------------------------
+# Data plane node list validation — collect all failures
+# ---------------------------------------------------------------------------
+
+- name: CIQ validation — collect missing nodes failure (pre-provisioned)
+  vars:
+    _err: >-
+      [nodes] Data Plane Provisioning Mode=pre-provisioned requires at least
+      {{ rhoso_ciq_validation_schema.rules.nodes_min_count_pre_provisioned }}
+      row(s) in rhoso_data_plane_nodes. Found: {{ rhoso_nodes | default([]) | length }}
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  when:
+    - (rhoso_dp_mode | default('') | lower) == 'pre-provisioned'
+    - >
+      (rhoso_nodes is not defined)
+      or (rhoso_nodes is not sequence)
+      or ((rhoso_nodes | length) < (rhoso_ciq_validation_schema.rules.nodes_min_count_pre_provisioned | int))
+
+- name: CIQ validation — collect required node-field failures
+  vars:
+    _node: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _node[_field.name] | default('') | string | trim }}"
+    _node_name: "{{ _node['Node Name'] | default('unnamed') }}"
+    _err: >-
+      [node:{{ _node_name }}] required field '{{ _field.name }}'
+      (type={{ _field.type }}, when={{ _field.when | default('always') }}) is empty
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  loop: "{{ rhoso_nodes | default([]) | product(rhoso_ciq_validation_schema.node_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Node Name'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (rhoso_nodes | default([]) | length) > 0
+    - item.1.required | default(false) | bool
+    - (item.0[item.1.name] | default('') | string | trim | length) == 0
+    - >
+      (item.1.when | default('always') == 'always')
+      or (item.1.when == 'pre_provisioned' and (rhoso_dp_mode | default('') | lower) == 'pre-provisioned')
+      or (item.1.when == 'unprovisioned' and (rhoso_dp_mode | default('') | lower) == 'unprovisioned')
+
+- name: CIQ validation — collect node-field pattern failures
+  vars:
+    _node: "{{ item.0 }}"
+    _field: "{{ item.1 }}"
+    _value: "{{ _node[_field.name] | default('') | string | trim }}"
+    _node_name: "{{ _node['Node Name'] | default('unnamed') }}"
+    _err: >-
+      [node:{{ _node_name }}] field '{{ _field.name }}' (type={{ _field.type }})
+      value '{{ _value }}' does not match pattern {{ _field.pattern }}
+  ansible.builtin.set_fact:
+    rhoso_ciq_validation_errors: "{{ rhoso_ciq_validation_errors + [_err] }}"
+  loop: "{{ rhoso_nodes | default([]) | product(rhoso_ciq_validation_schema.node_fields) | list }}"
+  loop_control:
+    label: "{{ item.0['Node Name'] | default('?') }}.{{ item.1.name }}"
+  when:
+    - (rhoso_nodes | default([]) | length) > 0
+    - (item.0[item.1.name] | default('') | string | trim | length) > 0
+    - not ((item.0[item.1.name] | default('') | string | trim) is match(item.1.pattern))
+
+# ---------------------------------------------------------------------------
+# Final report — fail once with every collected error
+# ---------------------------------------------------------------------------
+
+- name: CIQ validation — report all failed parameters / fields
+  ansible.builtin.debug:
+    msg:
+      - "CIQ validation found {{ rhoso_ciq_validation_errors | length }} error(s):"
+      - "{{ rhoso_ciq_validation_errors }}"
+  when: (rhoso_ciq_validation_errors | length) > 0
+
+- name: CIQ validation — fail with complete error list
+  ansible.builtin.fail:
+    msg: |
+      CIQ validation failed with {{ rhoso_ciq_validation_errors | length }} error(s).
+      Fix the following parameter / field(s) and re-run:
+
+      {% for err in rhoso_ciq_validation_errors %}
+      {{ loop.index }}. {{ err }}
+      {% endfor %}
+  when: (rhoso_ciq_validation_errors | length) > 0
+
+- name: CIQ validation — summary
+  ansible.builtin.debug:
+    msg:
+      - "All CIQ parameters, network rows, and node rows passed type/regexp validation."
+      - "Schema version: {{ rhoso_ciq_validation_schema.schema_version }}"

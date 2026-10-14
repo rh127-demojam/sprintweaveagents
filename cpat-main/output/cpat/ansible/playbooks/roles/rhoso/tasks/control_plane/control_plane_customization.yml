@@ -1,0 +1,82 @@
+﻿---
+# Customizing the Red Hat OpenStack Services on OpenShift deployment (RHOSO 18.0)
+# Post-initial control plane customizations: cells, topologies, service tuning,
+# feature enables (cinderBackup/Volumes, glance replicas, OVN gateways, etc.)
+
+- name: Control plane customization — document scope
+  ansible.builtin.debug:
+    msg:
+      - "Control Plane Customization"
+      - "Reference: Customizing the RHOSO deployment"
+      - "Typical follow-ups after initial OpenStackControlPlane is Setup complete:"
+      - "  - Enable/scale Cinder backup & volume backends"
+      - "  - Configure Glance backend and replicas"
+      - "  - Add Compute cells / connect NodeSets to cells"
+      - "  - Apply Topology / nodeSelector for pod placement"
+      - "  - OVN gateway placement ({{ rhoso_ovn_gateway }})"
+      - "  - Route / MetalLB VIP overrides for public endpoint {{ rhoso_control_plane_fqdn }}"
+
+- name: Control plane customization — require existing OpenStackControlPlane
+  ansible.builtin.command:
+    cmd: >-
+      oc get openstackcontrolplane {{ rhoso_control_plane_name }}
+      -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_cp_exists
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane customization — export current CR for editing
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc get openstackcontrolplane {{ rhoso_control_plane_name }} \
+      -n {{ rhoso_openstack_ns }} -o yaml \
+      > {{ rhoso_manifest_dir }}/openstack_control_plane_live.yaml
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane customization — generate patch guidance file
+  ansible.builtin.copy:
+    dest: "{{ rhoso_manifest_dir }}/control_plane_customization_notes.yaml"
+    mode: "0644"
+    content: |
+      # Apply customizations by editing OpenStackControlPlane then:
+      #   oc apply -f openstack_control_plane.yaml -n {{ rhoso_openstack_ns }}
+      #   oc get openstackcontrolplane -n {{ rhoso_openstack_ns }} -w
+      #
+      # Examples (see Customizing guide):
+      # - cinder.template.cinderBackup.replicas / cinderVolumes backends
+      # - glance.template.glanceAPIs.default.replicas + storage
+      # - nova.template.cellTemplates for additional cells
+      # - topologyRef / nodeSelector for service placement
+      # - ovn.template.ovnController gatewayConfig for {{ rhoso_ovn_gateway }}
+      controlPlaneFQDN: {{ rhoso_control_plane_fqdn }}
+      publicVIP: {{ rhoso_public_vip }}
+      storageClass: {{ rhoso_storage_class }}
+      storageBackend: {{ rhoso_storage_backend }}
+  delegate_to: localhost
+
+- name: Control plane customization — wait Ready after optional re-apply of generated CR
+  ansible.builtin.command:
+    cmd: >-
+      oc wait openstackcontrolplane {{ rhoso_control_plane_name }}
+      -n {{ rhoso_openstack_ns }}
+      --for=condition=Ready
+      --timeout={{ rhoso_wait_timeout }}
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane customization — summary
+  ansible.builtin.debug:
+    msg:
+      - "Live CR exported to {{ rhoso_manifest_dir }}/openstack_control_plane_live.yaml"
+      - "Customization notes: {{ rhoso_manifest_dir }}/control_plane_customization_notes.yaml"
+      - "Re-apply customized CR and wait for Setup complete before data plane changes"

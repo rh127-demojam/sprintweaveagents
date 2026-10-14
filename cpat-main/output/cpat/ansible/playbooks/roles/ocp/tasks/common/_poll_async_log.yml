@@ -1,0 +1,45 @@
+---
+# Helper: Poll an async job and display log file content.
+# Required vars: _async_jid, _async_log_file
+# Sets: _async_done (bool)
+
+- name: Read async job status and log
+  ansible.builtin.shell:
+    cmd: |
+      finished="no"
+      if [ -f /root/.ansible_async/{{ _async_jid }} ]; then
+        val=$(python3 -c "import json; print(json.load(open('/root/.ansible_async/{{ _async_jid }}')).get('finished',0))" 2>/dev/null || echo 0)
+        [ "$val" = "1" ] && finished="yes"
+      fi
+      echo "CPAT_FINISHED=$finished"
+  register: _async_check
+  changed_when: false
+  failed_when: false
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Read latest log output
+  ansible.builtin.shell:
+    cmd: tail -20 {{ _async_log_file }} 2>/dev/null || echo "(waiting for output...)"
+  register: _async_log_tail
+  changed_when: false
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: ">>> Live output"
+  ansible.builtin.debug:
+    msg: "{{ _async_log_tail.stdout_lines | default([]) }}"
+
+- name: Set async done flag
+  ansible.builtin.set_fact:
+    _async_done: "{{ 'CPAT_FINISHED=yes' in _async_check.stdout }}"

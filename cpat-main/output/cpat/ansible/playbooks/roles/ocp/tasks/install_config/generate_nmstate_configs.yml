@@ -1,0 +1,24 @@
+---
+# Generate per-host NMState network configurations.
+- name: Build per-host NMState groups
+  ansible.builtin.set_fact:
+    _ocp_nmstate_by_host: >-
+      {{ ocp_nmstate_interfaces | default([]) | groupby('Hostname') }}
+  when: ocp_nmstate_interfaces | default([]) | length > 0
+
+- name: Generate NMState config for each host
+  ansible.builtin.template:
+    src: ocp_nmstate_config.yaml.j2
+    dest: "{{ ocp_manifest_dir }}/nmstate-{{ item.0 | lower }}.yaml"
+    mode: "0644"
+  vars:
+    host_nmstate_interfaces: "{{ item.1 }}"
+  loop: "{{ _ocp_nmstate_by_host | default([]) }}"
+  loop_control:
+    label: "{{ item.0 }}"
+  delegate_to: localhost
+  when: _ocp_nmstate_by_host is defined
+
+- name: NMState configs generated
+  ansible.builtin.debug:
+    msg: "Generated {{ _ocp_nmstate_by_host | default([]) | length }} NMState host configurations."

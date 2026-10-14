@@ -1,0 +1,44 @@
+---
+# Generate storage-related CRs: LSO, Trident, and multipath configuration.
+# Sub-task of manifest_generation — renders templates when storage features enabled.
+
+- name: Storage CRs — document scope
+  ansible.builtin.debug:
+    msg:
+      - "Storage CR generation (v1.4 extensions)"
+      - "LSO enabled: {{ rhoso_lso_enabled | bool }}"
+      - "Trident enabled: {{ rhoso_trident_enabled | bool }}"
+      - "Multipath enabled: {{ rhoso_multipath_enabled | bool }}"
+      - "Output: {{ rhoso_manifest_dir }}"
+
+- name: Storage CRs — generate LSO manifests (Namespace + OperatorGroup + Subscription + LocalVolumeDiscovery + LocalVolumeSet)
+  ansible.builtin.template:
+    src: openstack_lso.yaml.j2
+    dest: "{{ rhoso_manifest_dir }}/openstack_lso.yaml"
+    mode: "0644"
+  delegate_to: localhost
+  when: rhoso_lso_enabled | bool
+
+- name: Storage CRs — generate Trident manifests (TridentOrchestrator + TridentBackendConfig + StorageClass + Secret)
+  ansible.builtin.template:
+    src: openstack_trident.yaml.j2
+    dest: "{{ rhoso_manifest_dir }}/openstack_trident.yaml"
+    mode: "0644"
+  delegate_to: localhost
+  when: rhoso_trident_enabled | bool
+
+- name: Storage CRs — generate multipath configuration (ConfigMap/Secret)
+  ansible.builtin.template:
+    src: openstack_multipath_config.yaml.j2
+    dest: "{{ rhoso_manifest_dir }}/openstack_multipath_config.yaml"
+    mode: "0644"
+  delegate_to: localhost
+  when: rhoso_multipath_enabled | bool
+
+- name: Storage CRs — generation summary
+  ansible.builtin.debug:
+    msg:
+      - "Generated storage CRs in {{ rhoso_manifest_dir }}:"
+      - "  - openstack_lso.yaml (LSO: {{ rhoso_lso_enabled | bool | ternary('generated', 'skipped') }})"
+      - "  - openstack_trident.yaml (Trident: {{ rhoso_trident_enabled | bool | ternary('generated', 'skipped') }})"
+      - "  - openstack_multipath_config.yaml (Multipath: {{ rhoso_multipath_enabled | bool | ternary('generated', 'skipped') }})"

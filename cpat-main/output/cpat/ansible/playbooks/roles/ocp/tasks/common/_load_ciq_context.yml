@@ -1,0 +1,153 @@
+---
+# Load OCP CIQ parameters and set derived facts.
+#
+# Supports two modes:
+# 1. Registration validation: ocp_ciq dict passed directly via extra_vars
+# 2. Installation tasks: CIQ stored in DB, parameters passed as flat extra_vars
+#    or via ocp_ciq_file pointing to the XLSX on disk
+- name: Verify OCP cluster is in dynamic inventory
+  ansible.builtin.assert:
+    that:
+      - ocp_cluster_name is defined
+      - ocp_cluster_name | length > 0
+    fail_msg: >-
+      OCP cluster name '{{ ocp_cluster_name | default('') }}' is not defined.
+      Register an OCP CIQ workbook first.
+
+# Try to load from hostvars (dynamic inventory from main.yml parse_ciq).
+# If not available, check if ocp_ciq was passed directly (registration flow).
+# If neither, build ocp_ciq from flat extra_vars (installation flow).
+- name: Load OCP CIQ parameters
+  ansible.builtin.set_fact:
+    ocp_ciq: >-
+      {{
+        hostvars[ocp_cluster_name].ciq_parameters
+        | default(
+            ocp_ciq
+            | default({})
+          )
+      }}
+    ocp_bmc_hosts: >-
+      {{
+        hostvars[ocp_cluster_name].ocp_bmc_hosts
+        | default(
+            ocp_bmc_hosts
+            | default([])
+          )
+      }}
+    ocp_nmstate_interfaces: >-
+      {{
+        hostvars[ocp_cluster_name].ocp_nmstate_interfaces
+        | default(
+            ocp_nmstate_interfaces
+            | default([])
+          )
+      }}
+    ocp_compute_nodes: >-
+      {{
+        hostvars[ocp_cluster_name].ocp_compute_nodes
+        | default(
+            ocp_compute_nodes
+            | default([])
+          )
+      }}
+    ocp_dns_records: >-
+      {{
+        hostvars[ocp_cluster_name].ocp_dns_records
+        | default(
+            ocp_dns_records
+            | default([])
+          )
+      }}
+  ignore_errors: true
+
+# If ocp_ciq is still empty, the CIQ parameters were passed as flat
+# ocp_* extra_vars from the backend (installation flow). Skip CIQ-based
+# resolution and use the flat vars directly.
+- name: Check if CIQ parameters are available
+  ansible.builtin.set_fact:
+    _ocp_has_ciq: "{{ (ocp_ciq | default({}) | length) > 0 }}"
+
+- name: Resolve OCP settings from CIQ dict
+  ansible.builtin.set_fact:
+    ocp_cluster_name: "{{ ocp_ciq['Cluster Name'] | default(ocp_cluster_name) }}"
+    ocp_base_domain: "{{ ocp_ciq['Base Domain'] | default(ocp_base_domain | default('')) }}"
+    ocp_version: "{{ ocp_ciq['OCP Version'] | default(ocp_version | default('')) }}"
+    ocp_install_method: "{{ ocp_ciq['Install Method'] | default(ocp_install_method | default('ABI')) | upper }}"
+    ocp_platform: "{{ ocp_ciq['Platform'] | default(ocp_platform | default('none')) | lower }}"
+    ocp_deployment_mode: "{{ ocp_ciq['Deployment Mode'] | default(ocp_deployment_mode | default('connected')) | lower }}"
+    ocp_architecture: "{{ ocp_ciq['Architecture'] | default(ocp_architecture | default('amd64')) }}"
+    ocp_control_plane_replicas: "{{ ocp_ciq['Control Plane Replicas'] | default(ocp_control_plane_replicas | default('3')) }}"
+    ocp_compute_replicas: "{{ ocp_ciq['Compute Replicas'] | default(ocp_compute_replicas | default('2')) }}"
+    ocp_fips_mode: "{{ ocp_ciq['FIPS Mode'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    ocp_pull_secret_path: "{{ ocp_ciq['Pull Secret Path'] | default(ocp_pull_secret_path | default('')) }}"
+    ocp_ssh_public_key_path: "{{ ocp_ciq['SSH Public Key Path'] | default(ocp_ssh_public_key_path | default('')) }}"
+    ocp_network_type: "{{ ocp_ciq['Network Type'] | default(ocp_network_type | default('OVNKubernetes')) }}"
+    ocp_cluster_network_cidr: "{{ ocp_ciq['Cluster Network CIDR'] | default(ocp_cluster_network_cidr | default('10.128.0.0/14')) }}"
+    ocp_cluster_network_host_prefix: "{{ ocp_ciq['Cluster Network Host Prefix'] | default(ocp_cluster_network_host_prefix | default('23')) }}"
+    ocp_service_network_cidr: "{{ ocp_ciq['Service Network CIDR'] | default(ocp_service_network_cidr | default('172.30.0.0/16')) }}"
+    ocp_machine_network_cidr: "{{ ocp_ciq['Machine Network CIDR'] | default(ocp_machine_network_cidr | default('')) }}"
+    ocp_rendezvous_ip: "{{ ocp_ciq['Rendezvous IP'] | default(ocp_rendezvous_ip | default('')) }}"
+    ocp_mirror_registry_url: "{{ ocp_ciq['Mirror Registry URL'] | default(ocp_mirror_registry_url | default('')) }}"
+    ocp_mirror_registry_ca_path: "{{ ocp_ciq['Mirror Registry CA Path'] | default(ocp_mirror_registry_ca_path | default('')) }}"
+    ocp_api_vip: "{{ ocp_ciq['API VIP'] | default(ocp_api_vip | default('')) }}"
+    ocp_ingress_vip: "{{ ocp_ciq['Ingress VIP'] | default(ocp_ingress_vip | default('')) }}"
+    ocp_lb_type: "{{ ocp_ciq['Load Balancer Type'] | default(ocp_lb_type | default('')) }}"
+    ocp_lb_config_path: "{{ ocp_ciq['LB Config Path'] | default(ocp_lb_config_path | default('/etc/haproxy/haproxy.cfg')) }}"
+    ocp_api_vip_platform_none: "{{ ocp_ciq['API VIP (platform none)'] | default(ocp_api_vip_platform_none | default('')) }}"
+    # Bastion
+    ocp_bastion_hostname: "{{ ocp_ciq['Bastion Hostname'] | default(ocp_bastion_hostname | default('')) }}"
+    ocp_bastion_ip: "{{ ocp_ciq['Bastion IP'] | default(ocp_bastion_ip | default('')) }}"
+    ocp_bastion_ssh_user: "{{ ocp_ciq['Bastion SSH User'] | default(ocp_bastion_ssh_user | default('root')) }}"
+    ocp_bastion_ssh_key_path: "{{ ocp_ciq['Bastion SSH Private Key Path'] | default(ocp_bastion_ssh_key_path | default('')) }}"
+    ocp_bastion_os: "{{ ocp_ciq['Bastion OS'] | default(ocp_bastion_os | default('')) }}"
+    ocp_bastion_interface: "{{ ocp_ciq['Bastion Interface'] | default(ocp_bastion_interface | default('enp1s0')) }}"
+    ocp_iso_http_port: "{{ ocp_ciq['ISO HTTP Port'] | default(ocp_iso_http_port | default('8089')) }}"
+    ocp_registry_mirror_enabled: "{{ ocp_ciq['Registry Mirror Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    # Mirror registry
+    ocp_quay_hostname: "{{ ocp_ciq['Quay Hostname'] | default(ocp_quay_hostname | default('')) }}"
+    ocp_quay_root_directory: "{{ ocp_ciq['Quay Root Directory'] | default(ocp_quay_root_directory | default('/opt/quay')) }}"
+    ocp_quay_init_password: "{{ ocp_ciq['Quay Init Password'] | default(ocp_quay_init_password | default('')) }}"
+    # NTP
+    ocp_additional_ntp_sources: "{{ ocp_ciq['Additional NTP Sources'] | default(ocp_additional_ntp_sources | default('')) }}"
+    # Load balancer ports
+    ocp_api_server_port: "{{ ocp_ciq['API Server Port'] | default(ocp_api_server_port | default('6443')) }}"
+    ocp_mcs_port: "{{ ocp_ciq['MCS Port'] | default(ocp_mcs_port | default('22623')) }}"
+    ocp_ingress_https_port: "{{ ocp_ciq['Ingress HTTPS Port'] | default(ocp_ingress_https_port | default('443')) }}"
+    ocp_ingress_http_port: "{{ ocp_ciq['Ingress HTTP Port'] | default(ocp_ingress_http_port | default('80')) }}"
+  when: _ocp_has_ciq | bool
+
+- name: Derive installation mode flags
+  ansible.builtin.set_fact:
+    ocp_is_disconnected: "{{ (ocp_deployment_mode | default('connected')) in ['disconnected'] }}"
+    ocp_is_abi: "{{ (ocp_install_method | default('ABI')) in ['ABI', 'ABI-DC'] }}"
+    ocp_is_ipi: "{{ (ocp_install_method | default('')) == 'IPI-BM' }}"
+    ocp_is_upi: "{{ (ocp_install_method | default('')) == 'UPI-BM' }}"
+    ocp_is_sno: "{{ (ocp_install_method | default('')) == 'SNO' }}"
+
+- name: Ensure OCP manifest work directory exists
+  ansible.builtin.file:
+    path: "{{ ocp_manifest_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+
+- name: Ensure OCP install directory exists
+  ansible.builtin.file:
+    path: "{{ ocp_install_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+
+- name: Auto-fetch Boot MAC Address via Redfish (best-effort)
+  ansible.builtin.include_tasks: common/_fetch_bmc_mac.yml
+  when:
+    - ocp_validate_ciq | default(true) | bool
+    - _ocp_has_ciq | bool
+    - ocp_bmc_hosts | default([]) | length > 0
+
+- name: Validate OCP CIQ fields
+  ansible.builtin.include_tasks: common/_validate_ciq.yml
+  when:
+    - ocp_validate_ciq | default(true) | bool
+    - _ocp_has_ciq | bool

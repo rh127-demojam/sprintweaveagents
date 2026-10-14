@@ -1,0 +1,43 @@
+# Keep Podman/Docker build context small and avoid OneDrive/Excel file locks.
+
+.git
+.gitignore
+.cursor
+agent-transcripts
+
+# Local/dev artifacts
+**/node_modules
+**/venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+frontend/dist
+backend/venv
+
+# Runtime data is never part of the image (mounted at /cpat-data)
+data
+backend/data
+backend/uploads
+*.db
+
+# CIQ samples and workbooks (not required inside the runtime image)
+CIQTemplates/*.xlsx
+samples
+*.xlsx
+*.xls
+NCP_AIQ*.xlsx
+
+# Docs / reference PDFs (large; not needed at runtime)
+RHOSO
+RHOSO.zip
+*.pdf
+*.zip
+
+# Editor / OS noise
+*.md
+!README.md
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.env

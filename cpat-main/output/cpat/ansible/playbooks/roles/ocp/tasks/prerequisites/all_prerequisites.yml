@@ -1,0 +1,27 @@
+---
+# Combined prerequisites: Bastion Preparation + DNS/DHCP Validation + NTP Sync
+
+- name: "=== Phase 1/3: Bastion Preparation ==="
+  ansible.builtin.debug:
+    msg: "Starting bastion preparation..."
+
+- name: Run bastion preparation
+  ansible.builtin.include_tasks: prerequisites/bastion_preparation.yml
+
+- name: "=== Phase 2/3: DNS/DHCP Validation ==="
+  ansible.builtin.debug:
+    msg: "Validating DNS and DHCP records..."
+
+- name: Run DNS/DHCP validation
+  ansible.builtin.include_tasks: prerequisites/dns_dhcp_validation.yml
+
+- name: "=== Phase 3/3: NTP Sync ==="
+  ansible.builtin.debug:
+    msg: "Synchronizing NTP on bastion..."
+
+- name: Run NTP sync
+  ansible.builtin.include_tasks: prerequisites/ntp_sync.yml
+
+- name: All prerequisites complete
+  ansible.builtin.debug:
+    msg: "Bastion preparation, DNS/DHCP validation, and NTP sync completed successfully."

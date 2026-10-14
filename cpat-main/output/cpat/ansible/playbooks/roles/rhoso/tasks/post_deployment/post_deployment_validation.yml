@@ -1,0 +1,102 @@
+﻿---
+# Validating and troubleshooting the deployed cloud (RHOSO 18.0)
+
+- name: Post-deployment validation — document checks
+  ansible.builtin.debug:
+    msg:
+      - "Post-Deployment Validation"
+      - "Reference: Validating and troubleshooting the deployed cloud"
+      - "Checks: ControlPlane Ready, NodeSet Ready, Deployment Ready,"
+      - "        openstackclient identity/compute/network smoke tests,"
+      - "        pod health in {{ rhoso_openstack_ns }}"
+
+- name: Post-deployment validation — OpenStackControlPlane Ready
+  ansible.builtin.command:
+    cmd: >-
+      oc get openstackcontrolplane {{ rhoso_control_plane_name }}
+      -n {{ rhoso_openstack_ns }}
+      -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_val_cp
+  changed_when: false
+  failed_when: rhoso_val_cp.stdout | default('') != 'True'
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Post-deployment validation — OpenStackDataPlaneNodeSet Ready
+  ansible.builtin.command:
+    cmd: >-
+      oc get openstackdataplanenodeset {{ rhoso_nodeset_name }}
+      -n {{ rhoso_openstack_ns }}
+      -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_val_ns
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Post-deployment validation — OpenStackDataPlaneDeployment Ready
+  ansible.builtin.command:
+    cmd: >-
+      oc get openstackdataplanedeployment {{ rhoso_deployment_name }}
+      -n {{ rhoso_openstack_ns }}
+      -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_val_dep
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Post-deployment validation — failing / pending pods
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc get pods -n {{ rhoso_openstack_ns }} \
+      --field-selector=status.phase!=Running,status.phase!=Succeeded || true
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_val_bad_pods
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Post-deployment validation — OpenStack CLI smoke via openstackclient
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc rsh -n {{ rhoso_openstack_ns }} openstackclient bash -lc '
+      set -e
+      openstack token issue >/dev/null
+      openstack service list
+      openstack endpoint list
+      openstack compute service list || true
+      openstack network agent list || true
+      openstack hypervisor list || true
+    '
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_val_cli
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Post-deployment validation — assert control plane healthy
+  ansible.builtin.assert:
+    that:
+      - rhoso_val_cp.stdout | default('') == 'True'
+    fail_msg: "OpenStackControlPlane is not Ready — see Validating/troubleshooting guide."
+  when: rhoso_can_apply | bool
+
+- name: Post-deployment validation — summary report
+  ansible.builtin.debug:
+    msg:
+      - "ControlPlane Ready: {{ rhoso_val_cp.stdout | default('n/a') }}"
+      - "NodeSet Ready: {{ rhoso_val_ns.stdout | default('n/a') }}"
+      - "Deployment Ready: {{ rhoso_val_dep.stdout | default('n/a') }}"
+      - "Non-running pods:"
+      - "{{ rhoso_val_bad_pods.stdout_lines | default([]) }}"
+      - "CLI smoke output:"
+      - "{{ rhoso_val_cli.stdout_lines | default(['skipped or openstackclient unavailable']) }}"

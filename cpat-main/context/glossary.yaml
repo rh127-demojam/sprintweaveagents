@@ -1,0 +1,69 @@
+# SprintWeave Domain Glossary
+# Terms listed here are used by agents for accurate domain-specific language.
+# Add your team's domain terms below.
+
+domain: telecom
+
+terms:
+  # Network Management
+  NMS: Network Management System
+  EMS: Element Management System
+  OSS: Operations Support System
+  BSS: Business Support System
+  NOC: Network Operations Center
+  SOC: Security Operations Center
+
+  # Network Elements
+  NE: Network Element
+  RAN: Radio Access Network
+  RNC: Radio Network Controller
+  BTS: Base Transceiver Station
+  eNodeB: Evolved Node B (LTE base station)
+  gNodeB: Next Generation Node B (5G base station)
+
+  # Protocols & Interfaces
+  SNMP: Simple Network Management Protocol
+  NETCONF: Network Configuration Protocol
+  YANG: Yet Another Next Generation (data modeling language)
+  CLI: Command Line Interface
+  NBI: Northbound Interface
+  SBI: Southbound Interface
+
+  # Operations
+  MoP: Method of Procedure
+  CR: Change Request
+  CAB: Change Advisory Board
+  RCA: Root Cause Analysis
+  SLA: Service Level Agreement
+  SLO: Service Level Objective
+  KPI: Key Performance Indicator
+  MTTR: Mean Time to Repair
+  MTBF: Mean Time Between Failures
+
+  # Deployment
+  HA: High Availability
+  DR: Disaster Recovery
+  RPO: Recovery Point Objective
+  RTO: Recovery Time Objective
+  COTS: Commercial Off-The-Shelf
+  VM: Virtual Machine
+  VNF: Virtual Network Function
+  CNF: Cloud-Native Network Function
+
+  # Cloud & Platform
+  K8s: Kubernetes
+  OCP: OpenShift Container Platform
+  CI/CD: Continuous Integration / Continuous Delivery
+  IaC: Infrastructure as Code
+  GitOps: Git-based Operations
+
+  # Standards
+  3GPP: 3rd Generation Partnership Project
+  ETSI: European Telecommunications Standards Institute
+  IETF: Internet Engineering Task Force
+  TMF: TeleManagement Forum
+
+# Add your team-specific terms below:
+# custom_terms:
+#   ACME: Your internal system name
+#   XYZ: Another internal term

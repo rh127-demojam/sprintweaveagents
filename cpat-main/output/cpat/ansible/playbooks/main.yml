@@ -1,0 +1,81 @@
+---
+- name: CPAT RHOSO automation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Parse CIQ workbook for dynamic inventory
+      parse_ciq:
+        path: "{{ ciq_file_path }}"
+      register: ciq_inventory
+      when: ciq_file_path is defined and ciq_file_path | length > 0
+      tags:
+        - always
+
+    - name: Add RHOSO environments to inventory
+      ansible.builtin.add_host:
+        name: "{{ item.cluster_name }}"
+        groups:
+          - rhoso_clusters
+          - cpat_clusters
+        ansible_connection: local
+        cluster_name: "{{ item.cluster_name }}"
+        cluster_type: "{{ item.cluster_type }}"
+        cluster_type_label: "{{ item.cluster_type_label }}"
+        type_raw_value: "{{ item.type_raw_value }}"
+        source_table: "{{ item.source_table }}"
+        source_sheet: "{{ item.source_sheet }}"
+        ciq_parameters: >-
+          {{ item.parameters | combine(ciq_parameter_overrides | default({})) }}
+        rhoso_networks: "{{ item.networks | default([]) }}"
+        rhoso_data_plane_nodes: "{{ item.nodes | default([]) }}"
+      loop: "{{ ciq_inventory.clusters | selectattr('cluster_type', 'equalto', 'rhoso') | list }}"
+      when:
+        - ciq_inventory is defined
+        - ciq_inventory.clusters is defined
+      tags:
+        - always
+
+    - name: Add RHOSO data plane nodes to inventory
+      ansible.builtin.add_host:
+        name: "{{ item.1['Node Name'] }}"
+        groups:
+          - rhoso_data_plane_nodes
+          - cpat_clusters
+        ansible_connection: ssh
+        ansible_host: "{{ item.1['Ansible Host'] | default(item.1['Node Name']) }}"
+        ansible_user: "{{ item.1['SSH User'] | default(item.0.parameters['Data Plane SSH User'] | default('cloud-admin')) }}"
+        ansible_private_key_file: >-
+          {{
+            (
+              item.0.parameters | combine(ciq_parameter_overrides | default({}))
+            )['Data Plane SSH Private Key Path'] | default('')
+          }}
+        node_name: "{{ item.1['Node Name'] }}"
+        node_role: "{{ item.1['Role'] | default('compute') }}"
+        rhoso_cluster_name: "{{ item.0.cluster_name }}"
+      loop: "{{ ciq_inventory.clusters | selectattr('cluster_type', 'equalto', 'rhoso') | selectattr('nodes', 'defined') | list | subelements('nodes') }}"
+      loop_control:
+        label: "{{ item.1['Node Name'] }}"
+      when:
+        - ciq_inventory is defined
+        - ciq_inventory.clusters is defined
+      tags:
+        - always
+
+    - name: Show dynamic inventory summary
+      ansible.builtin.debug:
+        msg:
+          - "CPAT dynamic inventory created from CIQ"
+          - "RHOSO environments ({{ groups.get('rhoso_clusters', []) | length }}): {{ groups.get('rhoso_clusters', []) }}"
+          - "RHOSO data plane nodes ({{ groups.get('rhoso_data_plane_nodes', []) | length }}): {{ groups.get('rhoso_data_plane_nodes', []) }}"
+      when: ciq_inventory is defined and ciq_inventory.clusters is defined
+      tags:
+        - always
+
+  roles:
+    - role: register
+      tags: register
+    - role: rhoso
+      tags: rhoso

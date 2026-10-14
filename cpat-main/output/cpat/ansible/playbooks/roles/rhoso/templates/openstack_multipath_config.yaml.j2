@@ -1,0 +1,35 @@
+{# Multipath configuration for NetApp ONTAP LUNs (v1.4)
+   Renders: Secret with multipath.conf for iSCSI/FC Cinder backend
+   Source: JIO D1.3_NetApp/multi-path-config.conf
+   Conditional: rendered when rhoso_multipath_enabled is true
+   Mounted on compute nodes via extraMounts when iSCSI/FC backend is configured #}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ rhoso_multipath_secret_name }}
+  namespace: {{ rhoso_openstack_ns }}
+type: Opaque
+stringData:
+  multipath.conf: |
+    defaults {
+        user_friendly_names {{ rhoso_multipath_user_friendly_names | default('yes') }}
+        find_multipaths {{ rhoso_multipath_find_multipaths | default('yes') }}
+    }
+    devices {
+        device {
+            vendor "NETAPP"
+            product "LUN.*"
+            path_grouping_policy group_by_prio
+            prio ontap
+            path_selector "round-robin 0"
+            path_checker tur
+            features "3 queue_if_no_path pg_init_retries 50"
+            rr_weight uniform
+            rr_min_io_rq 1
+            failback immediate
+            dev_loss_tmo infinity
+            fast_io_fail_tmo 5
+            no_path_retry queue
+        }
+    }

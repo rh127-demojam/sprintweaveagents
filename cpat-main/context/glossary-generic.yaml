@@ -1,0 +1,82 @@
+# SprintWeave Domain Glossary - Generic / Enterprise
+# Use with team-config.yaml: domain: generic
+
+domain: generic
+
+terms:
+  # Agile & Project Management
+  Sprint: Time-boxed iteration (typically 1-4 weeks)
+  Epic: Large body of work decomposed into stories
+  User Story: Requirement from end-user perspective
+  AC: Acceptance Criteria
+  DoD: Definition of Done
+  DoR: Definition of Ready
+  PBI: Product Backlog Item
+  Velocity: Story points completed per sprint
+  Burndown: Chart showing remaining work over time
+  Retrospective: Sprint review meeting for improvement
+  Standup: Daily sync meeting (15 min)
+  PI: Program Increment (SAFe)
+  ART: Agile Release Train (SAFe)
+
+  # Software Development
+  API: Application Programming Interface
+  REST: Representational State Transfer
+  gRPC: Google Remote Procedure Call
+  SDK: Software Development Kit
+  CLI: Command Line Interface
+  UI: User Interface
+  UX: User Experience
+  MVP: Minimum Viable Product
+  PoC: Proof of Concept
+  RFC: Request for Comments
+  ADR: Architecture Decision Record
+
+  # Quality & Testing
+  QA: Quality Assurance
+  UAT: User Acceptance Testing
+  E2E: End-to-End testing
+  BDD: Behavior-Driven Development
+  TDD: Test-Driven Development
+  SAST: Static Application Security Testing
+  DAST: Dynamic Application Security Testing
+  SonarQube: Code quality analysis platform
+  Coverage: Percentage of code exercised by tests
+
+  # Security & Compliance
+  SSO: Single Sign-On
+  MFA: Multi-Factor Authentication
+  LDAP: Lightweight Directory Access Protocol
+  PKI: Public Key Infrastructure
+  TLS: Transport Layer Security
+  CVE: Common Vulnerabilities and Exposures
+  CVSS: Common Vulnerability Scoring System
+  SOC2: Service Organization Control 2
+  GDPR: General Data Protection Regulation
+  PII: Personally Identifiable Information
+
+  # ITSM & Operations
+  ITIL: Information Technology Infrastructure Library
+  ITSM: IT Service Management
+  CMDB: Configuration Management Database
+  CI: Configuration Item (ITSM context)
+  Incident: Unplanned service interruption
+  Problem: Root cause of recurring incidents
+  Change: Controlled modification to infrastructure
+  CAB: Change Advisory Board
+  SLA: Service Level Agreement
+  MTTR: Mean Time to Repair
+  MTBF: Mean Time Between Failures
+  RCA: Root Cause Analysis
+  PIR: Post-Incident Review
+
+  # Data & Integration
+  ETL: Extract, Transform, Load
+  CDC: Change Data Capture
+  Kafka: Distributed event streaming platform
+  RabbitMQ: Message broker
+  Redis: In-memory data store
+  PostgreSQL: Relational database
+  MongoDB: Document database
+  GraphQL: Query language for APIs
+  Webhook: HTTP callback for event notification

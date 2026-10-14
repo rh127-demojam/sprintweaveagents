@@ -1,0 +1,51 @@
+---
+- name: Register OCP environment
+  ansible.builtin.debug:
+    msg:
+      - "CPAT: Starting OCP registration"
+      - "Cluster Name: {{ ciq.cluster_name }}"
+      - "Type: {{ ciq.cluster_type_label }}"
+  tags: register
+
+- name: Validate OCP CIQ identity
+  ansible.builtin.assert:
+    that:
+      - ciq.cluster_type == 'ocp'
+      - ciq.cluster_name | length > 0
+    fail_msg: "Invalid OCP CIQ data."
+  tags: register
+
+# Map parse_ciq output into the same facts used by ocp/_validate_ciq.yml
+- name: Prepare OCP CIQ facts for field validation
+  ansible.builtin.set_fact:
+    ocp_ciq: "{{ ciq.parameters | default({}) }}"
+    ocp_bmc_hosts: "{{ ciq.bmc_hosts | default([]) }}"
+    ocp_nmstate_interfaces: "{{ ciq.nmstate_interfaces | default([]) }}"
+    ocp_compute_nodes: "{{ ciq.compute_nodes | default([]) }}"
+    ocp_dns_records: "{{ ciq.dns_records | default([]) }}"
+    ocp_cluster_name: "{{ ciq.cluster_name }}"
+    ocp_install_method: "{{ ciq.parameters['Install Method'] | default('ABI') | upper }}"
+    ocp_deployment_mode: "{{ ciq.parameters['Deployment Mode'] | default('connected') | lower }}"
+  tags: register
+
+- name: Derive OCP installation mode flags
+  ansible.builtin.set_fact:
+    ocp_is_disconnected: "{{ ocp_deployment_mode in ['disconnected', 'airgapped', 'offline'] }}"
+    ocp_is_abi: "{{ ocp_install_method in ['ABI', 'ABI-DC'] }}"
+    ocp_is_ipi: "{{ ocp_install_method == 'IPI-BM' }}"
+    ocp_is_upi: "{{ ocp_install_method == 'UPI-BM' }}"
+    ocp_is_sno: "{{ ocp_install_method == 'SNO' }}"
+  tags: register
+
+- name: Auto-fetch Boot MAC Address via Redfish (best-effort)
+  ansible.builtin.include_tasks: ../../ocp/tasks/common/_fetch_bmc_mac.yml
+  tags: register
+
+- name: Validate every OCP CIQ field against type / regexp schema
+  ansible.builtin.include_tasks: ../../ocp/tasks/common/_validate_ciq.yml
+  tags: register
+
+- name: OCP registration complete
+  ansible.builtin.debug:
+    msg: "OCP environment '{{ ciq.cluster_name }}' registered and validated successfully."
+  tags: register

@@ -1,0 +1,15 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: {{ rhoso_catsrc_name }}
+  namespace: {{ rhoso_catsrc_namespace }}
+spec:
+  sourceType: grpc
+  displayName: RHOSO Mirrored Operators
+  publisher: CPAT
+  image: {{ rhoso_catsrc_image }}
+  updateStrategy:
+    registryPoll:
+      interval: 30m
+  grpcPodConfig:
+    securityContextConfig: restricted

@@ -1,0 +1,101 @@
+﻿---
+# Deploying RHOSO 18.0 — Chapter 3: Preparing networks for RHOSO
+# Generates NNCP, NAD, MetalLB, NetConfig CRs from CIQ (same generators as control plane).
+
+- name: Network preparation — document steps
+  ansible.builtin.debug:
+    msg:
+      - "Network Preparation (Deploying RHOSO Ch.3)"
+      - "CRDs: NodeNetworkConfigurationPolicy, NetworkAttachmentDefinition,"
+      - "      IPAddressPool, L2Advertisement, NetConfig"
+      - "CIQ networks: {{ rhoso_networks | map(attribute='Network Name') | list }}"
+
+- name: Network preparation — verify network-related CRDs
+  ansible.builtin.include_tasks: common/_verify_required_crds.yml
+  vars:
+    rhoso_crd_check_list: "{{ rhoso_required_crds_control_plane | rejectattr('kind', 'equalto', 'OpenStack') | rejectattr('kind', 'equalto', 'OpenStackControlPlane') | list }}"
+
+- name: Network preparation — generate network CRs from CIQ
+  ansible.builtin.include_tasks: control_plane/_generate_control_plane_crs.yml
+  when: not (rhoso_skip_generation | bool)
+
+- name: Network preparation — require reviewed network manifests when skipping generation
+  ansible.builtin.stat:
+    path: "{{ rhoso_manifest_dir }}/{{ item }}"
+  register: rhoso_net_manifest_stats
+  loop:
+    - openstack_nncp.yaml
+    - openstack_nad.yaml
+    - openstack_metallb.yaml
+    - openstack_netconfig.yaml
+  delegate_to: localhost
+  when: rhoso_skip_generation | bool
+
+- name: Network preparation — assert reviewed network manifests exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      Reviewed manifest missing: {{ item.item }} under {{ rhoso_manifest_dir }}.
+      Run "Generate Manifests for Review", inspect artifacts in the UI, then re-run this task.
+  loop: "{{ rhoso_net_manifest_stats.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('n/a') }}"
+  when: rhoso_skip_generation | bool
+
+- name: Network preparation — apply NNCP / NAD / MetalLB / NetConfig
+  ansible.builtin.command:
+    cmd: oc apply -f {{ item }}
+  environment: "{{ rhoso_oc_env }}"
+  loop:
+    - "{{ rhoso_manifest_dir }}/openstack_nncp.yaml"
+    - "{{ rhoso_manifest_dir }}/openstack_nad.yaml"
+    - "{{ rhoso_manifest_dir }}/openstack_metallb.yaml"
+    - "{{ rhoso_manifest_dir }}/openstack_netconfig.yaml"
+  register: rhoso_net_apply
+  changed_when: "'created' in stdout or 'configured' in stdout"
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Network preparation — enable OVNKubernetes global IP forwarding if needed
+  ansible.builtin.shell: |
+    set -euo pipefail
+    backend=$(oc get network.operator cluster -o jsonpath='{.spec.defaultNetwork.type}')
+    echo "Network backend=${backend}"
+    if [[ "${backend}" == "OVNKubernetes" ]]; then
+      oc patch network.operator cluster --type=merge \
+        -p '{"spec":{"defaultNetwork":{"ovnKubernetesConfig":{"gatewayConfig":{"ipForwarding":"Global"}}}}}'
+    fi
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_ovn_fwd
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Network preparation — verify resources
+  ansible.builtin.shell: |
+    set -euo pipefail
+    echo "=== NetConfig ==="
+    oc get netconfig -n {{ rhoso_openstack_ns }} || true
+    echo "=== NetworkAttachmentDefinitions ==="
+    oc get network-attachment-definitions -n {{ rhoso_openstack_ns }} || true
+    echo "=== NNCP ==="
+    oc get nncp || true
+    echo "=== MetalLB ==="
+    oc get -n metallb-system IPAddressPool,L2Advertisement || true
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_net_verify
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Network preparation — summary
+  ansible.builtin.debug:
+    msg:
+      - "Network CRs generated under {{ rhoso_manifest_dir }}"
+      - "{{ rhoso_net_verify.stdout_lines | default(['(apply disabled — manifests only)']) }}"

@@ -1,0 +1,555 @@
+apiVersion: core.openstack.org/v1beta1
+kind: OpenStackControlPlane
+metadata:
+  name: {{ rhoso_control_plane_name }}
+  namespace: {{ rhoso_openstack_ns }}
+spec:
+{% if rhoso_tls_pod_level | bool %}
+  tls:
+    podLevel:
+      enabled: true
+{% endif %}
+  secret: {{ rhoso_osp_secret_name }}
+  storageClass: {{ rhoso_storage_class }}
+  messagingBus:
+    cluster: {{ rhoso_messaging_bus_cluster }}
+  notificationsBus:
+    cluster: {{ rhoso_notifications_bus_cluster }}
+{% if (rhoso_dns_vip | default('') | string) | length > 0 %}
+  dns:
+    template:
+      override:
+        service:
+          metadata:
+            annotations:
+              metallb.universe.tf/address-pool: {{ rhoso_mgmt_net }}
+              metallb.universe.tf/allow-shared-ip: {{ rhoso_mgmt_net }}
+              metallb.universe.tf/loadBalancerIPs: {{ rhoso_dns_vip }}
+          spec:
+            type: LoadBalancer
+{% if (rhoso_dns_upstream_servers | default('') | string) | length > 0 %}
+      options:
+{% for srv in rhoso_dns_upstream_servers.split(',') %}
+        - key: server
+          values:
+            - {{ srv | trim }}
+{% endfor %}
+{% endif %}
+      replicas: {{ rhoso_dns_replicas | int }}
+{% endif %}
+  galera:
+    templates:
+      openstack:
+        storageRequest: {{ rhoso_galera_storage }}
+        secret: {{ rhoso_osp_secret_name }}
+        replicas: {{ rhoso_galera_replicas | int }}
+      openstack-cell1:
+        storageRequest: {{ rhoso_galera_cell1_storage }}
+        secret: {{ rhoso_osp_secret_name }}
+        replicas: {{ rhoso_galera_cell1_replicas | int }}
+  rabbitmq:
+    templates:
+      rabbitmq:
+        replicas: {{ rhoso_rabbitmq_replicas | int }}
+{% if (rhoso_rabbitmq_cpu_limit | default('') | string) | length > 0 %}
+        resources:
+          limits:
+            cpu: "{{ rhoso_rabbitmq_cpu_limit }}"
+            memory: {{ rhoso_rabbitmq_memory_limit | default('4Gi') }}
+          requests:
+            cpu: "{{ rhoso_rabbitmq_cpu_limit }}"
+            memory: {{ rhoso_rabbitmq_memory_limit | default('4Gi') }}
+{% endif %}
+        override:
+          service:
+            metadata:
+              annotations:
+                metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['RabbitMQ VIP'] }}
+            spec:
+              type: LoadBalancer
+      rabbitmq-cell1:
+        replicas: {{ rhoso_rabbitmq_cell1_replicas | int }}
+{% if (rhoso_rabbitmq_cpu_limit | default('') | string) | length > 0 %}
+        resources:
+          limits:
+            cpu: "{{ rhoso_rabbitmq_cpu_limit }}"
+            memory: {{ rhoso_rabbitmq_memory_limit | default('4Gi') }}
+          requests:
+            cpu: "{{ rhoso_rabbitmq_cpu_limit }}"
+            memory: {{ rhoso_rabbitmq_memory_limit | default('4Gi') }}
+{% endif %}
+        override:
+          service:
+            metadata:
+              annotations:
+                metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Cell1 RabbitMQ VIP'] }}
+            spec:
+              type: LoadBalancer
+  memcached:
+    templates:
+      memcached:
+        replicas: {{ rhoso_memcached_replicas | int }}
+  keystone:
+    template:
+      databaseInstance: openstack
+      secret: {{ rhoso_osp_secret_name }}
+      replicas: {{ rhoso_keystone_replicas | int }}
+      override:
+        service:
+          internal:
+            metadata:
+              annotations:
+                metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Internal API VIP'] }}
+            spec:
+              type: LoadBalancer
+  glance:
+{% if (rhoso_glance_backend | default('') | string) | length > 0 %}
+    enabled: true
+{% endif %}
+    apiOverrides:
+      default:
+        route: {}
+    template:
+{% if rhoso_glance_backend == 'cinder' %}
+      customServiceConfig: |
+        [DEFAULT]
+        enabled_backends = default_backend:cinder
+        [glance_store]
+        default_backend = default_backend
+        [default_backend]
+        store_description = Default cinder backend
+        cinder_store_auth_address = {{ '{{' }} .KeystoneInternalURL {{ '}}' }}
+        cinder_store_user_name = {{ '{{' }} .ServiceUser {{ '}}' }}
+        cinder_store_password = {{ '{{' }} .ServicePassword {{ '}}' }}
+        cinder_store_project_name = service
+        cinder_catalog_info = volumev3::internalURL
+{% elif rhoso_ceph_external | bool %}
+      customServiceConfig: |
+        [DEFAULT]
+        enabled_backends = default_backend:rbd
+        [glance_store]
+        default_backend = default_backend
+        [default_backend]
+        rbd_store_ceph_conf = /etc/ceph/{{ rhoso_ceph_cluster_name }}.conf
+        rbd_store_user = {{ rhoso_ceph_client_name }}
+        rbd_store_pool = {{ rhoso_ceph_pool_images }}
+{% endif %}
+      databaseInstance: openstack
+{% if rhoso_glance_backend == 'cinder' %}
+      storage:
+        external: true
+{% elif rhoso_ceph_external | bool %}
+      storage:
+        external: true
+{% else %}
+      storageClass: {{ rhoso_storage_class }}
+      storageRequest: 10G
+{% endif %}
+      secret: {{ rhoso_osp_secret_name }}
+      keystoneEndpoint: default
+{% if rhoso_ceph_external | bool %}
+      extraMounts:
+        - name: ceph-conf
+          region: default
+          extraVol:
+            - propagation:
+                - Glance
+              extraVolType: Ceph
+              volumes:
+                - name: ceph
+                  secret:
+                    secretName: ceph-conf-files
+              mounts:
+                - name: ceph
+                  mountPath: /etc/ceph
+                  readOnly: true
+{% endif %}
+      glanceAPIs:
+        default:
+          replicas: {{ rhoso_glance_replicas | int }}
+          override:
+            service:
+              internal:
+                metadata:
+                  annotations:
+                    metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                    metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                    metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Glance Internal VIP'] }}
+                spec:
+                  type: LoadBalancer
+{% if rhoso_glance_backend == 'cinder' %}
+          networkAttachments:
+            - storagemgmt
+{% elif rhoso_ceph_external | bool %}
+          networkAttachments:
+            - storage
+{% endif %}
+  cinder:
+    apiOverride:
+      route: {}
+    template:
+{% if (rhoso_cinder_default_volume_type | default('') | string) | length > 0 %}
+      customServiceConfig: |
+        [DEFAULT]
+        default_volume_type = {{ rhoso_cinder_default_volume_type }}
+{% endif %}
+      databaseInstance: openstack
+      secret: {{ rhoso_osp_secret_name }}
+      cinderAPI:
+        replicas: {{ rhoso_cinder_api_replicas | int }}
+{% if (rhoso_cinder_default_volume_type | default('') | string) | length > 0 %}
+        customServiceConfig: |
+          [DEFAULT]
+          enable_force_upload = true
+{% endif %}
+        override:
+          service:
+            internal:
+              metadata:
+                annotations:
+                  metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Cinder Internal VIP'] }}
+              spec:
+                type: LoadBalancer
+      cinderScheduler:
+        replicas: {{ rhoso_cinder_scheduler_replicas | int }}
+      cinderBackup:
+        replicas: 0
+{% if (rhoso_cinder_volume_backend_name | default('') | string) | length > 0 %}
+      cinderVolumes:
+        {{ rhoso_cinder_volume_backend_name }}:
+          customServiceConfig: |
+            [{{ rhoso_cinder_volume_backend_name }}]
+            volume_backend_name={{ rhoso_cinder_volume_backend_name }}
+{% if (rhoso_cinder_volume_driver | default('') | string) | length > 0 %}
+            volume_driver={{ rhoso_cinder_volume_driver }}
+{% endif %}
+{% if (rhoso_cinder_netapp_hostname | default('') | string) | length > 0 %}
+            netapp_server_hostname={{ rhoso_cinder_netapp_hostname }}
+{% endif %}
+{% if (rhoso_cinder_storage_protocol | default('') | string) | length > 0 %}
+            netapp_storage_protocol={{ rhoso_cinder_storage_protocol }}
+{% endif %}
+{% if (rhoso_cinder_netapp_vserver | default('') | string) | length > 0 %}
+            netapp_vserver={{ rhoso_cinder_netapp_vserver }}
+{% endif %}
+            netapp_storage_family=ontap_cluster
+{% if (rhoso_cinder_volume_secret | default('') | string) | length > 0 %}
+          customServiceConfigSecrets:
+            - {{ rhoso_cinder_volume_secret }}
+{% endif %}
+{% if (rhoso_cinder_volume_net_attachments | default('') | string) | length > 0 %}
+          networkAttachments:
+{% for att in rhoso_cinder_volume_net_attachments.split(',') %}
+            - {{ att | trim }}
+{% endfor %}
+{% endif %}
+          replicas: 1
+          resources: {}
+{% elif rhoso_ceph_external | bool %}
+      cinderVolumes:
+        ceph:
+          customServiceConfig: |
+            [ceph]
+            volume_backend_name=ceph
+            volume_driver=cinder.volume.drivers.rbd.RBDDriver
+            rbd_ceph_conf=/etc/ceph/{{ rhoso_ceph_cluster_name }}.conf
+            rbd_user={{ rhoso_ceph_client_name }}
+            rbd_pool={{ rhoso_ceph_pool_volumes }}
+            rbd_flatten_volume_from_snapshot=False
+            rbd_secret_uuid={{ rhoso_ceph_fsid }}
+          networkAttachments:
+            - storage
+          replicas: 1
+          resources: {}
+{% if rhoso_ceph_external | bool %}
+      extraMounts:
+        - name: ceph-conf
+          region: default
+          extraVol:
+            - propagation:
+                - CinderVolume
+                - CinderBackup
+              extraVolType: Ceph
+              volumes:
+                - name: ceph
+                  secret:
+                    secretName: ceph-conf-files
+              mounts:
+                - name: ceph
+                  mountPath: /etc/ceph
+                  readOnly: true
+{% endif %}
+{% else %}
+      cinderVolumes: {}
+{% endif %}
+  ovn:
+    template:
+      ovnDBCluster:
+        ovndbcluster-nb:
+          storageRequest: {{ rhoso_ovn_nb_storage }}
+          dbType: NB
+          networkAttachment: {{ rhoso_internalapi_net }}
+          replicas: {{ rhoso_ovn_nb_replicas | int }}
+        ovndbcluster-sb:
+          storageRequest: {{ rhoso_ovn_sb_storage }}
+          dbType: SB
+          networkAttachment: {{ rhoso_internalapi_net }}
+          replicas: {{ rhoso_ovn_sb_replicas | int }}
+      ovnNorthd:
+        networkAttachment: {{ rhoso_internalapi_net }}
+      ovnController:
+        networkAttachment: {{ rhoso_mgmt_net }}
+{% if (rhoso_ciq['Datacentre NIC'] | default('') | string) | length > 0 %}
+        nicMappings:
+          datacentre: {{ rhoso_ciq['Datacentre NIC'] }}
+{% endif %}
+  neutron:
+    apiOverride:
+      route: {}
+    template:
+      databaseInstance: openstack
+      secret: {{ rhoso_osp_secret_name }}
+      replicas: {{ rhoso_neutron_replicas | int }}
+{% if (rhoso_neutron_api_timeout | default('') | string) | length > 0 %}
+      apiTimeout: {{ rhoso_neutron_api_timeout | int }}
+{% endif %}
+{% if (rhoso_neutron_global_physnet_mtu | default('') | string) | length > 0 or (rhoso_ovn_emit_need_to_frag | default('') | string) | length > 0 %}
+      customServiceConfig: |
+        [DEFAULT]
+{% if (rhoso_neutron_global_physnet_mtu | default('') | string) | length > 0 %}
+        global_physnet_mtu={{ rhoso_neutron_global_physnet_mtu }}
+{% endif %}
+{% if (rhoso_neutron_physical_network_mtus | default('') | string) | length > 0 %}
+        [ml2]
+        physical_network_mtus = {{ rhoso_neutron_physical_network_mtus }}
+{% endif %}
+{% if (rhoso_ovn_emit_need_to_frag | default('') | string) | length > 0 %}
+        [ovn]
+        ovn_emit_need_to_frag = {{ (rhoso_ovn_emit_need_to_frag | string | lower in ['yes', 'true', '1']) | ternary('true', 'false') }}
+{% endif %}
+{% if (rhoso_mac_binding_age_threshold | default('') | string) | length > 0 %}
+        [ovn]
+        ovn_mac_binding_age_threshold = {{ rhoso_mac_binding_age_threshold }}
+{% endif %}
+{% endif %}
+      override:
+        service:
+          internal:
+            metadata:
+              annotations:
+                metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Neutron Internal VIP'] }}
+            spec:
+              type: LoadBalancer
+      networkAttachments:
+        - internalapi
+  nova:
+    apiOverride:
+      route: {}
+    template:
+      secret: {{ rhoso_osp_secret_name }}
+{% if rhoso_ceph_external | bool %}
+      cellTemplates:
+        cell0:
+          cellDatabaseAccount: nova-cell0
+          cellDatabaseInstance: openstack
+          cellMessageBusInstance: rabbitmq
+          hasAPIAccess: true
+          conductorServiceTemplate:
+            replicas: {{ rhoso_nova_conductor_cell0_replicas | int }}
+        cell1:
+          cellDatabaseAccount: nova-cell1
+          cellDatabaseInstance: openstack-cell1
+          cellMessageBusInstance: rabbitmq-cell1
+          hasAPIAccess: true
+          noVNCProxyServiceTemplate:
+            enabled: true
+            replicas: {{ rhoso_nova_cell1_novnc_replicas | int }}
+          conductorServiceTemplate:
+            replicas: {{ rhoso_nova_conductor_cell1_replicas | int }}
+          metadataServiceTemplate:
+            enabled: true
+            replicas: {{ rhoso_nova_cell1_metadata_replicas | int }}
+          novaComputeTemplates:
+            default:
+              computeDriver: libvirt.LibvirtDriver
+              customServiceConfig: |
+                [libvirt]
+                images_type=rbd
+                images_rbd_pool={{ rhoso_ceph_pool_vms }}
+                images_rbd_ceph_conf=/etc/ceph/{{ rhoso_ceph_cluster_name }}.conf
+                rbd_user={{ rhoso_ceph_client_name }}
+                rbd_secret_uuid={{ rhoso_ceph_fsid }}
+      extraMounts:
+        - name: ceph-conf
+          region: default
+          extraVol:
+            - propagation:
+                - Nova
+              extraVolType: Ceph
+              volumes:
+                - name: ceph
+                  secret:
+                    secretName: ceph-conf-files
+              mounts:
+                - name: ceph
+                  mountPath: /etc/ceph
+                  readOnly: true
+{% endif %}
+      apiServiceTemplate:
+        replicas: {{ rhoso_nova_api_replicas | int }}
+        override:
+          service:
+            internal:
+              metadata:
+                annotations:
+                  metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Nova Internal VIP'] }}
+              spec:
+                type: LoadBalancer
+      metadataServiceTemplate:
+        enabled: {{ rhoso_nova_metadata_enabled | bool | ternary('true', 'false') }}
+      schedulerServiceTemplate:
+        replicas: {{ rhoso_nova_scheduler_replicas | int }}
+{% if not (rhoso_ceph_external | bool) %}
+      cellTemplates:
+        cell0:
+          cellDatabaseAccount: nova-cell0
+          cellDatabaseInstance: openstack
+          cellMessageBusInstance: rabbitmq
+          hasAPIAccess: true
+          conductorServiceTemplate:
+            replicas: {{ rhoso_nova_conductor_cell0_replicas | int }}
+        cell1:
+          cellDatabaseAccount: nova-cell1
+          cellDatabaseInstance: openstack-cell1
+          cellMessageBusInstance: rabbitmq-cell1
+          hasAPIAccess: true
+          noVNCProxyServiceTemplate:
+            enabled: true
+            replicas: {{ rhoso_nova_cell1_novnc_replicas | int }}
+          conductorServiceTemplate:
+            replicas: {{ rhoso_nova_conductor_cell1_replicas | int }}
+          metadataServiceTemplate:
+            enabled: true
+            replicas: {{ rhoso_nova_cell1_metadata_replicas | int }}
+{% endif %}
+  placement:
+    apiOverride:
+      route: {}
+    template:
+      databaseInstance: openstack
+      secret: {{ rhoso_osp_secret_name }}
+      replicas: {{ rhoso_placement_replicas | int }}
+      override:
+        service:
+          internal:
+            metadata:
+              annotations:
+                metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Placement Internal VIP'] }}
+            spec:
+              type: LoadBalancer
+  horizon:
+    apiOverride:
+      route: {}
+    enabled: {{ rhoso_horizon_enabled | bool | ternary('true', 'false') }}
+    template:
+      replicas: {{ rhoso_horizon_replicas | int }}
+      secret: {{ rhoso_osp_secret_name }}
+  heat:
+    apiOverride:
+      route: {}
+    enabled: {{ rhoso_heat_enabled | bool | ternary('true', 'false') }}
+    template:
+      databaseInstance: openstack
+      secret: {{ rhoso_osp_secret_name }}
+      heatAPI:
+        replicas: {{ rhoso_heat_api_replicas | int }}
+        override:
+          service:
+            internal:
+              metadata:
+                annotations:
+                  metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Internal API VIP'] }}
+              spec:
+                type: LoadBalancer
+      heatEngine:
+        replicas: {{ rhoso_heat_engine_replicas | int }}
+  barbican:
+    apiOverride:
+      route: {}
+    enabled: {{ rhoso_barbican_enabled | bool | ternary('true', 'false') }}
+    template:
+      databaseInstance: openstack
+      secret: {{ rhoso_osp_secret_name }}
+      barbicanAPI:
+        replicas: {{ rhoso_barbican_api_replicas | int }}
+        override:
+          service:
+            internal:
+              metadata:
+                annotations:
+                  metallb.universe.tf/address-pool: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/allow-shared-ip: {{ rhoso_internalapi_net }}
+                  metallb.universe.tf/loadBalancerIPs: {{ rhoso_ciq['Internal API VIP'] }}
+              spec:
+                type: LoadBalancer
+      barbicanWorker:
+        replicas: {{ rhoso_barbican_worker_replicas | int }}
+      barbicanKeystoneListener:
+        replicas: 1
+  ironic:
+    enabled: {{ rhoso_ironic_enabled | bool | ternary('true', 'false') }}
+  manila:
+    enabled: {{ rhoso_manila_enabled | bool | ternary('true', 'false') }}
+  octavia:
+    enabled: {{ rhoso_octavia_enabled | bool | ternary('true', 'false') }}
+  designate:
+    enabled: {{ rhoso_designate_enabled | bool | ternary('true', 'false') }}
+  watcher:
+    enabled: {{ rhoso_watcher_enabled | bool | ternary('true', 'false') }}
+{% if rhoso_ceph_external | bool and rhoso_ceph_rgw_enabled | bool %}
+  swift:
+    enabled: true
+    proxyOverride:
+      route: {}
+    template:
+      swiftProxy:
+        replicas: 1
+        ceph:
+          cephConfigMap: ceph-conf-files
+{% endif %}
+  telemetry:
+    enabled: {{ rhoso_telemetry_enabled | bool | ternary('true', 'false') }}
+{% if rhoso_telemetry_enabled | bool %}
+    template:
+      metricStorage:
+        enabled: true
+        dashboardsEnabled: true
+        monitoringStack:
+          alertingEnabled: true
+          scrapeInterval: {{ rhoso_telemetry_scrape_interval }}
+{% if (rhoso_telemetry_storage_class | default('') | string) | length > 0 %}
+          storageClass: {{ rhoso_telemetry_storage_class }}
+{% endif %}
+          storage:
+            strategy: persistent
+            retention: {{ rhoso_telemetry_retention }}
+            persistent:
+              pvcStorageRequest: {{ rhoso_telemetry_storage }}
+      ceilometer:
+        enabled: true
+        secret: {{ rhoso_osp_secret_name }}
+{% endif %}

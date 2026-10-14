@@ -1,0 +1,163 @@
+﻿---
+# Deploying RHOSO 18.0 — Chapter 1: Installing and preparing the OpenStack Operator
+# Connected: source=redhat-operators (default)
+# Disconnected: source/CIQ Operator Source must point at mirrored CatalogSource
+
+- name: OpenStack Operator — document CLI procedure
+  ansible.builtin.debug:
+    msg:
+      - "OpenStack Operator Installation and Preparation"
+      - "Reference: Deploying RHOSO 18.0 Chapter 1 (CLI)"
+      - "Mode: {{ rhoso_deployment_mode }} (disconnected={{ rhoso_is_disconnected }})"
+      - "Subscription source={{ rhoso_operator_source }} ns={{ rhoso_operator_source_ns }}"
+      - "1) Create namespace {{ rhoso_operators_ns }}"
+      - "2) Create OperatorGroup"
+      - "3) Create Subscription (channel={{ rhoso_operator_channel }}, Manual approval)"
+      - "4) Approve InstallPlan"
+      - "5) Create OpenStack initialization CR"
+      - "6) Verify CSV Status=Succeeded"
+
+- name: OpenStack Operator — disconnected requires mirrored CatalogSource
+  ansible.builtin.assert:
+    that:
+      - rhoso_catsrc_image | length > 0
+      - rhoso_operator_source | length > 0
+    fail_msg: >-
+      Disconnected installs must set CatalogSource Image and Operator Source
+      to the mirrored catalog. Run 'Disconnected Environment Preparation' first.
+  when: rhoso_is_disconnected | bool
+
+- name: OpenStack Operator — verify CatalogSource exists when disconnected
+  ansible.builtin.command:
+    cmd: >-
+      oc get catalogsource {{ rhoso_operator_source }}
+      -n {{ rhoso_operator_source_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_is_disconnected | bool
+
+- name: OpenStack Operator — create operators namespace
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: {{ rhoso_operators_ns }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_op_ns
+  changed_when: "'created' in rhoso_op_ns.stdout or 'configured' in rhoso_op_ns.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: OpenStack Operator — create OperatorGroup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      name: openstack
+      namespace: {{ rhoso_operators_ns }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_og
+  changed_when: "'created' in rhoso_og.stdout or 'configured' in rhoso_og.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: OpenStack Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: openstack-operator
+      namespace: {{ rhoso_operators_ns }}
+    spec:
+      name: openstack-operator
+      channel: {{ rhoso_operator_channel }}
+      source: {{ rhoso_operator_source }}
+      sourceNamespace: {{ rhoso_operator_source_ns }}
+      installPlanApproval: Manual
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_sub
+  changed_when: "'created' in rhoso_sub.stdout or 'configured' in rhoso_sub.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: OpenStack Operator — approve pending InstallPlan
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for i in $(seq 1 60); do
+      plan=$(oc get installplan -n {{ rhoso_operators_ns }} -o json \
+        | jq -r '.items[] | select(.spec.approval=="Manual" and .spec.approved==false) | .metadata.name' \
+        | head -n1)
+      if [[ -n "${plan}" && "${plan}" != "null" ]]; then
+        echo "Approving InstallPlan ${plan}"
+        oc patch installplan "${plan}" -n {{ rhoso_operators_ns }} \
+          --type merge -p '{"approved":true}'
+        exit 0
+      fi
+      sleep 10
+    done
+    echo "No pending Manual InstallPlan found (may already be approved)"
+    exit 0
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: OpenStack Operator — create OpenStack initialization resource
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operator.openstack.org/v1beta1
+    kind: OpenStack
+    metadata:
+      name: openstack
+      namespace: {{ rhoso_operators_ns }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_os_init
+  changed_when: "'created' in rhoso_os_init.stdout or 'configured' in rhoso_os_init.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: OpenStack Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+900))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n {{ rhoso_operators_ns }} \
+        -o jsonpath='{.items[?(@.spec.displayName=="OpenStack Operator")].status.phase}' 2>/dev/null || true)
+      echo "OpenStack Operator CSV phase=${phase}"
+      if [[ "${phase}" == "Succeeded" ]]; then
+        exit 0
+      fi
+      sleep 15
+    done
+    oc get csv -n {{ rhoso_operators_ns }} || true
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool

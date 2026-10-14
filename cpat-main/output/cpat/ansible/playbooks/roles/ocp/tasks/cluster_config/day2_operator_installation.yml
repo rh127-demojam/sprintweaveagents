@@ -1,0 +1,39 @@
+---
+# Install day-2 operators based on CIQ selections.
+- name: Build list of requested day-2 operators
+  ansible.builtin.set_fact:
+    ocp_day2_operators_to_install: >-
+      {{
+        (ocp_nmstate_operator_enabled | bool) | ternary(['kubernetes-nmstate-operator'], [])
+        + (ocp_metallb_operator_enabled | bool) | ternary(['metallb-operator'], [])
+        + (ocp_sriov_operator_enabled | bool) | ternary(['sriov-network-operator'], [])
+        + (ocp_lso_operator_enabled | bool) | ternary(['local-storage-operator'], [])
+        + (ocp_odf_operator_enabled | bool) | ternary(['odf-operator'], [])
+        + (ocp_cert_manager_enabled | bool) | ternary(['openshift-cert-manager-operator'], [])
+        + (ocp_cluster_logging_enabled | bool) | ternary(['cluster-logging'], [])
+        + (ocp_gitops_operator_enabled | bool) | ternary(['openshift-gitops-operator'], [])
+        + (ocp_mce_operator_enabled | bool) | ternary(['multicluster-engine'], [])
+      }}
+
+- name: Generate operator Subscription CRs
+  ansible.builtin.template:
+    src: ocp_day2_operator_sub.yaml.j2
+    dest: "{{ ocp_manifest_dir }}/operator-sub-{{ item }}.yaml"
+    mode: "0644"
+  loop: "{{ ocp_day2_operators_to_install }}"
+  delegate_to: localhost
+  vars:
+    operator_name: "{{ item }}"
+
+- name: Apply operator Subscriptions
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} apply -f {{ ocp_manifest_dir }}/operator-sub-{{ item }}.yaml"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  loop: "{{ ocp_day2_operators_to_install }}"
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Report installed operators
+  ansible.builtin.debug:
+    msg: "Installed {{ ocp_day2_operators_to_install | length }} day-2 operators: {{ ocp_day2_operators_to_install | join(', ') }}"

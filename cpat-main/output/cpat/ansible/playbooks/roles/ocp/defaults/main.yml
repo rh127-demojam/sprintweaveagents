@@ -1,0 +1,171 @@
+---
+# ============================================================================
+# OCP Role Defaults — CIQ-driven OpenShift Container Platform installation
+# Schema v1.1 | ~120 default variables
+# ============================================================================
+
+# --- Cluster Identity ---
+ocp_cluster_name: ""
+ocp_base_domain: ""
+ocp_version: "4.19"
+ocp_install_method: "ABI"           # ABI, IPI-BM, UPI-BM, ABI-DC, SNO
+ocp_platform: "none"                # baremetal, vsphere, none, external
+ocp_deployment_mode: "connected"    # connected, disconnected
+ocp_architecture: "amd64"
+ocp_control_plane_replicas: 3
+ocp_compute_replicas: 2
+ocp_hyperthreading: "Enabled"
+ocp_fips_mode: false
+ocp_publish: "External"
+ocp_cpu_partitioning: "None"
+ocp_feature_set: ""
+
+# --- Access ---
+ocp_pull_secret_path: ""
+ocp_ssh_public_key_path: ""
+ocp_kubeconfig_path: ""
+ocp_credentials_mode: ""
+
+# --- Networking ---
+ocp_network_type: "OVNKubernetes"
+ocp_cluster_network_cidr: "10.128.0.0/14"
+ocp_cluster_network_host_prefix: "23"
+ocp_service_network_cidr: "172.30.0.0/16"
+ocp_machine_network_cidr: "10.0.0.0/16"
+ocp_cluster_network_cidr_v6: ""
+ocp_service_network_cidr_v6: ""
+ocp_machine_network_cidr_v6: ""
+ocp_ip_families: "IPv4"
+ocp_network_mtu: ""
+ocp_additional_trust_bundle: ""
+ocp_additional_trust_bundle_path: ""
+
+# --- Proxy ---
+ocp_http_proxy: ""
+ocp_https_proxy: ""
+ocp_no_proxy: ""
+ocp_proxy_ca_bundle_path: ""
+ocp_proxy_enabled: false
+
+# --- Platform: Bare Metal (IPI) ---
+ocp_api_vip: ""
+ocp_ingress_vip: ""
+ocp_provisioning_network: "Disabled"
+ocp_provisioning_network_cidr: ""
+ocp_provisioning_mac_address: ""
+ocp_provisioning_network_interface: ""
+ocp_provisioning_dhcp_range: ""
+ocp_cluster_provisioning_ip: ""
+ocp_bootstrap_os_image_url: ""
+ocp_cluster_os_image_url: ""
+ocp_external_bridge: ""
+ocp_libvirt_uri: ""
+
+# --- Agent Config (ABI) ---
+ocp_rendezvous_ip: ""
+ocp_boot_artifacts_base_url: ""
+ocp_additional_ntp_sources: ""
+ocp_agent_trust_bundle_path: ""
+ocp_agent_http_proxy: ""
+ocp_agent_https_proxy: ""
+ocp_agent_no_proxy: ""
+ocp_control_plane_agent_count: ""
+ocp_worker_agent_count: ""
+ocp_bootstrap_in_place: false
+
+# --- Disconnected ---
+ocp_mirror_registry_url: ""
+ocp_mirror_registry_ca_path: ""
+ocp_image_content_source_1: ""
+ocp_image_content_mirror_1: ""
+ocp_image_content_source_2: ""
+ocp_image_content_mirror_2: ""
+ocp_idms_name: ""
+ocp_itms_name: ""
+ocp_catalogsource_name: "redhat-operators"
+ocp_catalogsource_image: ""
+ocp_disable_default_catalogsources: false
+ocp_oc_mirror_workspace: ""
+ocp_operator_index_image: ""
+ocp_registry_credentials_path: ""
+
+# --- Mirror Registry (Quay) ---
+ocp_quay_hostname: ""
+ocp_quay_root_directory: "/opt/quay"
+ocp_quay_version: ""
+ocp_quay_init_password: ""
+ocp_quay_tls_cert_path: ""
+ocp_quay_tls_key_path: ""
+ocp_quay_storage_backend: "local"
+ocp_quay_storage_path: ""
+
+# --- Bastion ---
+ocp_bastion_hostname: ""
+ocp_bastion_ip: ""
+ocp_bastion_os: "RHEL 9.4"
+ocp_bastion_rhel_version: ""
+ocp_bastion_disk_layout: ""
+ocp_registry_mirror_enabled: false
+ocp_dhcp_tftp_server: false
+ocp_bastion_ntp_server: ""
+ocp_bastion_interface: "enp1s0"
+
+# --- Load Balancer (platform=none) ---
+ocp_lb_type: "HAProxy"
+ocp_api_server_port: 6443
+ocp_mcs_port: 22623
+ocp_ingress_https_port: 443
+ocp_ingress_http_port: 80
+ocp_lb_backend_servers: ""
+ocp_lb_config_path: "/etc/haproxy/haproxy.cfg"
+ocp_iso_http_port: 8089
+ocp_api_vip_platform_none: ""
+
+# --- Certificates ---
+ocp_api_cert_path: ""
+ocp_ingress_wildcard_cert_path: ""
+ocp_ca_bundle_path: ""
+ocp_lets_encrypt_enabled: false
+ocp_custom_ca_enabled: false
+ocp_cert_validity_days: 3650
+
+# --- Storage ---
+ocp_default_storage_class: ""
+ocp_csi_driver: ""
+ocp_nfs_server: ""
+ocp_nfs_path: ""
+ocp_lso_enabled: false
+ocp_lso_device_paths: ""
+ocp_odf_enabled: false
+ocp_odf_storage_class: ""
+
+# --- Day-2 Operators ---
+ocp_nmstate_operator_enabled: false
+ocp_metallb_operator_enabled: false
+ocp_sriov_operator_enabled: false
+ocp_multus_enabled: false
+ocp_lso_operator_enabled: false
+ocp_odf_operator_enabled: false
+ocp_cert_manager_enabled: false
+ocp_cluster_logging_enabled: false
+ocp_monitoring_stack_enabled: false
+ocp_gitops_operator_enabled: false
+ocp_mce_operator_enabled: false
+ocp_operator_install_plan_approval: "Automatic"
+
+# --- Ingress ---
+ocp_ingress_controller_replicas: ""
+ocp_ingress_default_cert_path: ""
+ocp_wildcard_policy: "WildcardsDisallowed"
+ocp_route_admission_policy: ""
+ocp_endpoint_publishing_strategy: "LoadBalancerService"
+ocp_ingress_node_selector: ""
+
+# --- Operational ---
+ocp_install_dir: "/home/{{ ocp_bastion_ssh_user | default('root') }}/ocp-install"
+ocp_manifest_dir: "/tmp/cpat-ocp-manifests"
+ocp_apply_manifests: true
+ocp_validate_ciq: true
+ocp_skip_generation: false
+ocp_openshift_install_binary: "openshift-install"
+ocp_oc_binary: "oc"

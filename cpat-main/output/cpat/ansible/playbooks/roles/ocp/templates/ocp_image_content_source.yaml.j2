@@ -1,0 +1,17 @@
+---
+apiVersion: config.openshift.io/v1
+kind: ImageDigestMirrorSet
+metadata:
+  name: {{ ocp_idms_name | default('ocp-idms') }}
+spec:
+  imageDigestMirrors:
+{% if ocp_image_content_source_1 | default('') | length > 0 %}
+  - mirrors:
+    - {{ ocp_image_content_mirror_1 }}
+    source: {{ ocp_image_content_source_1 }}
+{% endif %}
+{% if ocp_image_content_source_2 | default('') | length > 0 %}
+  - mirrors:
+    - {{ ocp_image_content_mirror_2 }}
+    source: {{ ocp_image_content_source_2 }}
+{% endif %}

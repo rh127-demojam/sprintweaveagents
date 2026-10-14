@@ -1,0 +1,223 @@
+---
+# Bootstrap the OCP cluster after booting nodes with agent ISO or ignition.
+# Runs on bastion via async/poll — can take 30-60 minutes.
+#
+# Smart media-eject: monitors bootstrap-complete.log for "Writing image to
+# disk: 100%" on every BMC host. Once all hosts reach 100%, ejects virtual
+# media from all nodes so they reboot from disk instead of ISO.
+
+- name: Display bootstrap instructions
+  ansible.builtin.debug:
+    msg:
+      - "== OCP Cluster Bootstrap =="
+      - "Install method: {{ ocp_install_method }}"
+      - "Cluster: {{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+      - ""
+      - "For ABI/ABI-DC: Boot all nodes from agent.{{ ocp_architecture }}.iso"
+      - "For UPI: Boot nodes with generated ignition configs via PXE/TFTP"
+      - "For IPI: The installer handles node provisioning automatically"
+      - ""
+      - "Waiting for bootstrap to complete..."
+
+# --- ABI / SNO bootstrap ---
+- name: Wait for bootstrap to complete — ABI/SNO (async)
+  ansible.builtin.shell:
+    cmd: >-
+      {{ ocp_openshift_install_binary }}
+      --dir {{ ocp_install_dir }}
+      agent wait-for bootstrap-complete
+      --log-level=info
+      > {{ ocp_install_dir }}/bootstrap-complete.log 2>&1
+  register: _bootstrap_job_abi
+  failed_when: false
+  async: 5400
+  poll: 0
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool or ocp_is_sno | bool
+    - ocp_apply_manifests | bool
+
+# --- IPI / UPI bootstrap ---
+- name: Wait for bootstrap to complete — IPI/UPI (async)
+  ansible.builtin.shell:
+    cmd: >-
+      {{ ocp_openshift_install_binary }}
+      --dir {{ ocp_install_dir }}
+      wait-for bootstrap-complete
+      --log-level=info
+      > {{ ocp_install_dir }}/bootstrap-complete.log 2>&1
+  register: _bootstrap_job_ipi
+  failed_when: false
+  async: 5400
+  poll: 0
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_ipi | bool or ocp_is_upi | bool
+    - ocp_apply_manifests | bool
+
+# --- Resolve which job ID to poll ---
+- name: Set bootstrap job ID
+  ansible.builtin.set_fact:
+    _bootstrap_jid: "{{ _bootstrap_job_abi.ansible_job_id | default(_bootstrap_job_ipi.ansible_job_id | default('')) }}"
+  when: ocp_apply_manifests | bool
+
+- name: Display async job ID
+  ansible.builtin.debug:
+    msg: "Bootstrap async job ID: {{ _bootstrap_jid | default('none — skipped') }}"
+
+# ====================================================================
+# Smart media-eject: poll bootstrap log for disk-write completion,
+# then eject virtual media from all BMC hosts.
+# ====================================================================
+- name: Build list of BMC hostnames to track
+  ansible.builtin.set_fact:
+    _bmc_hostnames: "{{ ocp_bmc_hosts | map(attribute='Hostname') | list }}"
+    _media_ejected: false
+  when:
+    - ocp_apply_manifests | bool
+    - ocp_is_abi | bool or ocp_is_sno | bool
+    - ocp_bmc_hosts | default([]) | length > 0
+
+- name: "Monitor disk-write progress — poll every 30s (up to 30 min)"
+  ansible.builtin.shell:
+    cmd: |
+      LOG="{{ ocp_install_dir }}/bootstrap-complete.log"
+      if [ ! -f "$LOG" ]; then echo "NO_LOG"; exit 0; fi
+      TOTAL={{ ocp_bmc_hosts | length }}
+      DONE=0
+      for HOST in {{ _bmc_hostnames | join(' ') }}; do
+        if grep -q "Host: ${HOST}.*Writing image to disk: 100%" "$LOG" 2>/dev/null; then
+          DONE=$((DONE + 1))
+        fi
+      done
+      echo "${DONE}/${TOTAL}"
+      if [ "$DONE" -ge "$TOTAL" ]; then exit 0; else exit 1; fi
+  register: _disk_write_status
+  until: _disk_write_status.rc == 0 and _disk_write_status.stdout != 'NO_LOG'
+  retries: 60
+  delay: 30
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_apply_manifests | bool
+    - ocp_is_abi | bool or ocp_is_sno | bool
+    - ocp_bmc_hosts | default([]) | length > 0
+    - not (_media_ejected | bool)
+
+- name: Display disk-write status
+  ansible.builtin.debug:
+    msg: "Disk-write progress: {{ _disk_write_status.stdout | default('unknown') }} nodes complete"
+  when: _disk_write_status is not skipped
+
+- name: "Eject virtual media from {{ item.Hostname }}"
+  ansible.builtin.uri:
+    url: >-
+      {{ (item['BMC Address'] | default(''))
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('/redfish/v1/.*$', '') }}{{ (item['BMC Address'] | default(''))
+         | regex_replace('^redfish(-virtualmedia)?\+?://', 'http://')
+         | regex_replace('^https?://[^/]+', '') | regex_replace('$', '/VirtualMedia/Cd/Actions/VirtualMedia.EjectMedia') }}
+    method: POST
+    user: "{{ item['BMC Username'] | default('admin') }}"
+    password: "{{ item['BMC Password Reference'] | default('password') }}"
+    force_basic_auth: true
+    validate_certs: false
+    timeout: 15
+    body_format: json
+    body: {}
+    status_code: [200, 204, 400, 404]
+  loop: "{{ ocp_bmc_hosts }}"
+  loop_control:
+    label: "{{ item.Hostname }}"
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_apply_manifests | bool
+    - ocp_is_abi | bool or ocp_is_sno | bool
+    - ocp_bmc_hosts | default([]) | length > 0
+    - _disk_write_status.rc | default(1) == 0
+    - _disk_write_status.stdout | default('') != 'NO_LOG'
+
+- name: Mark media as ejected
+  ansible.builtin.set_fact:
+    _media_ejected: true
+  when:
+    - _disk_write_status is defined
+    - _disk_write_status.rc | default(1) == 0
+
+- name: Media eject result
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Virtual media ejected from all ' + (ocp_bmc_hosts | length | string) + ' nodes — they will reboot from disk.'
+         if (_media_ejected | default(false) | bool)
+         else 'Media eject skipped or timed out — check nodes manually.' }}
+
+# ====================================================================
+# Poll until bootstrap is done
+# ====================================================================
+- name: Wait for bootstrap to finish
+  ansible.builtin.async_status:
+    jid: "{{ _bootstrap_jid }}"
+  register: ocp_bootstrap_result
+  until: ocp_bootstrap_result.finished
+  retries: 180
+  delay: 30
+  failed_when: false
+  ignore_unreachable: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
+  when:
+    - ocp_apply_manifests | bool
+    - _bootstrap_jid | default('') | length > 0
+
+- name: Fetch bootstrap log to CPAT
+  ansible.builtin.fetch:
+    src: "{{ ocp_install_dir }}/bootstrap-complete.log"
+    dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-bootstrap-complete.log"
+    flat: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  failed_when: false
+  when: ocp_apply_manifests | bool
+
+- name: Display bootstrap result
+  ansible.builtin.debug:
+    msg: "{{ ocp_bootstrap_result.stdout_lines | default(['Bootstrap still in progress — check bootstrap-complete.log on bastion']) }}"
+
+- name: Fail if bootstrap did not complete
+  ansible.builtin.fail:
+    msg: "Bootstrap failed — see bootstrap-complete.log for details"
+  when:
+    - ocp_apply_manifests | bool
+    - ocp_bootstrap_result is defined
+    - ocp_bootstrap_result is not skipped
+    - ocp_bootstrap_result.rc | default(1) | int != 0

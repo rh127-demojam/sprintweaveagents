@@ -1,0 +1,14 @@
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: {{ ocp_catalogsource_name }}
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: {{ ocp_catalogsource_image }}
+  displayName: {{ ocp_catalogsource_display | default(ocp_catalogsource_name) }}
+  publisher: {{ ocp_catalogsource_publisher | default('Mirror') }}
+  updateStrategy:
+    registryPoll:
+      interval: 10m

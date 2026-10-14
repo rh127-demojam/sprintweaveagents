@@ -1,0 +1,128 @@
+---
+# Create agent ISO for ABI/ABI-DC installations.
+# Runs openshift-install on bastion via async/poll and fetches the log to CPAT.
+
+- name: Ensure install directory exists on bastion
+  ansible.builtin.file:
+    path: "{{ ocp_install_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Ensure openshift/ subdirectory exists on bastion
+  ansible.builtin.file:
+    path: "{{ ocp_install_dir }}/openshift"
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Create agent ISO image (async)
+  ansible.builtin.shell:
+    cmd: >-
+      {{ ocp_openshift_install_binary }} --dir {{ ocp_install_dir }}
+      agent create image
+      > {{ ocp_install_dir }}/agent-create-image.log 2>&1
+  register: ocp_agent_iso_job
+  failed_when: false
+  async: 3600
+  poll: 0
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Wait for agent ISO creation to complete
+  ansible.builtin.async_status:
+    jid: "{{ ocp_agent_iso_job.ansible_job_id }}"
+  register: ocp_agent_iso_result
+  until: ocp_agent_iso_result.finished
+  retries: 60
+  delay: 30
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Fetch agent ISO creation log to CPAT
+  ansible.builtin.fetch:
+    src: "{{ ocp_install_dir }}/agent-create-image.log"
+    dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-agent-create-image.log"
+    flat: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  failed_when: false
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Display agent ISO creation output
+  ansible.builtin.debug:
+    msg: "{{ ocp_agent_iso_result.stdout_lines | default([]) + ['', 'rc=' + (ocp_agent_iso_result.rc | default('unknown') | string)] }}"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+
+- name: Fail if agent ISO creation failed
+  ansible.builtin.fail:
+    msg: "Agent ISO creation failed — see agent-create-image.log for details"
+  when:
+    - ocp_is_abi | bool
+    - ocp_apply_manifests | bool
+    - ocp_agent_iso_result.rc | default(1) | int != 0
+
+- name: Set ISO architecture name
+  ansible.builtin.set_fact:
+    _iso_arch: "{{ 'x86_64' if ocp_architecture == 'amd64' else ('aarch64' if ocp_architecture == 'arm64' else ocp_architecture) }}"
+  when: ocp_is_abi | bool
+
+- name: Verify agent ISO was created on bastion
+  ansible.builtin.stat:
+    path: "{{ ocp_install_dir }}/agent.{{ _iso_arch }}.iso"
+  register: ocp_iso_stat
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_is_abi | bool
+
+- name: Report agent ISO creation
+  ansible.builtin.debug:
+    msg: >-
+      Agent ISO created at {{ ocp_install_dir }}/agent.{{ _iso_arch }}.iso
+      on bastion ({{ (ocp_iso_stat.stat.size | default(0) / 1048576) | round(1) }} MB)
+  when:
+    - ocp_is_abi | bool
+    - ocp_iso_stat.stat.exists | default(false)

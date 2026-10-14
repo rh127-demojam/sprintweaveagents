@@ -1,0 +1,111 @@
+# CPAT Domain Glossary - Cloud, RHOSO & Platform
+# Loaded when team-config.yaml domain: cloud
+
+domain: cloud
+
+terms:
+  # RHOSO / OpenStack
+  RHOSO: Red Hat OpenStack Services on OpenShift
+  RHOCP: Red Hat OpenShift Container Platform
+  CIQ: Customer Input Questionnaire (Excel workbook with deployment parameters)
+  CPAT: Cloud Platform Automation Tool
+  EDPM: External Data Plane Management
+  ControlPlane: OpenStack control plane running as pods on OCP
+  DataPlane: Compute nodes managed externally by OpenStack
+  NodeSet: OpenStackDataPlaneNodeSet CR defining compute node inventory
+  NetConfig: Network configuration CR for OpenStack networks
+  NNCP: NodeNetworkConfigurationPolicy (NMState network config per node)
+  NAD: NetworkAttachmentDefinition (Multus secondary network)
+  BareMetalHost: Metal3 CR for bare-metal node lifecycle management
+  BMC: Baseboard Management Controller
+  NMState: Kubernetes operator for declarative node network configuration
+
+  # OpenStack Services
+  Keystone: Identity service
+  Glance: Image service
+  Cinder: Block storage service
+  Neutron: Networking service
+  Nova: Compute service
+  Heat: Orchestration service
+  Horizon: Dashboard service
+  Barbican: Key management service
+  Octavia: Load balancing service
+  Designate: DNS service
+  Ironic: Bare-metal provisioning service
+  Manila: Shared file system service
+  Telemetry: Monitoring and metering (Ceilometer, Aodh, Gnocchi)
+  Placement: Resource tracking and scheduling service
+  Galera: MariaDB Galera cluster for database HA
+  RabbitMQ: Message queue service
+  Memcached: In-memory caching service
+  OVN: Open Virtual Network (Neutron ML2 backend)
+
+  # Containers & Kubernetes
+  K8s: Kubernetes
+  OCP: OpenShift Container Platform
+  Pod: Smallest deployable unit in Kubernetes
+  Operator: Kubernetes extension for managing complex applications
+  OLM: Operator Lifecycle Manager
+  CRD: Custom Resource Definition
+  CR: Custom Resource
+  Helm: Kubernetes package manager
+  MetalLB: Bare-metal load balancer for Kubernetes
+  CNI: Container Network Interface
+  Multus: CNI plugin for multiple network interfaces
+
+  # Networking
+  VLAN: Virtual Local Area Network
+  VIP: Virtual IP Address
+  CIDR: Classless Inter-Domain Routing
+  DPDK: Data Plane Development Kit
+  OVS: Open vSwitch
+  MTU: Maximum Transmission Unit
+  SR-IOV: Single Root I/O Virtualization
+  BGP: Border Gateway Protocol
+  SDN: Software-Defined Networking
+
+  # Infrastructure & Hardware
+  NUMA: Non-Uniform Memory Access
+  NIC: Network Interface Card
+  IPMI: Intelligent Platform Management Interface
+  Redfish: Modern server management API
+  iDRAC: Integrated Dell Remote Access Controller
+  iLO: Integrated Lights-Out (HP)
+  PXE: Preboot Execution Environment
+  UEFI: Unified Extensible Firmware Interface
+
+  # Storage
+  Ceph: Distributed storage platform
+  NFS: Network File System
+  iSCSI: Internet Small Computer Systems Interface
+  LVM: Logical Volume Manager
+  PV: Persistent Volume
+  PVC: Persistent Volume Claim
+  StorageClass: Kubernetes storage provisioner definition
+  CSI: Container Storage Interface
+  Trident: NetApp CSI driver for Kubernetes
+
+  # Automation & CI/CD
+  Ansible: Agentless automation framework
+  Playbook: Ansible automation definition file
+  Role: Reusable Ansible automation unit
+  Jinja2: Python template engine used by Ansible
+  AAP: Ansible Automation Platform
+  Podman: Daemonless container engine
+  Gunicorn: Python WSGI HTTP server
+  Nginx: Web server and reverse proxy
+  SSE: Server-Sent Events (streaming API)
+  Flask: Python micro web framework
+
+  # Security
+  RBAC: Role-Based Access Control
+  mTLS: Mutual Transport Layer Security
+  TLS: Transport Layer Security
+  OIDC: OpenID Connect
+  SELinux: Security-Enhanced Linux
+
+  # Observability
+  SLI: Service Level Indicator
+  SLO: Service Level Objective
+  Prometheus: Metrics collection and alerting
+  Grafana: Visualization and dashboarding

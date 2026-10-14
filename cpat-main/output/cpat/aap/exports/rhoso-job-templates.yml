@@ -1,0 +1,133 @@
+# ---------------------------------------------------------------------------
+# CPAT RHOSO Job Templates for AAP 2.5
+# Owner: RHOSO Deployment Engineer (RDE-5)
+# Import: awx-manage import < rhoso-job-templates.yml
+# ---------------------------------------------------------------------------
+---
+job_templates:
+
+  # =========================================================================
+  # 1. CPAT RHOSO Install — Single playbook, survey selects the task
+  # =========================================================================
+  - name: "CPAT RHOSO Install"
+    description: >-
+      Run any RHOSO installation task via CPAT. Select the task from the
+      survey dropdown. Supports all 19 RHOSO tasks: manifests, prerequisites,
+      secrets, storage, control plane, network, data plane, and post-deployment.
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/main.yml"
+    execution_environment: "CPAT EE"
+    credentials: []
+    job_tags: "rhoso"
+    verbosity: 0
+    timeout: 14400
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "RHOSO Installation Parameters"
+      description: "Configure the RHOSO installation task and cluster parameters"
+      spec:
+        - question_name: "RHOSO Task"
+          question_description: "Select the RHOSO installation task to execute"
+          variable: "installation_task"
+          type: "multiplechoice"
+          required: true
+          default: "manifests/manifest_generation"
+          choices:
+            - "manifests/manifest_generation"
+            - "prerequisites/prerequisites"
+            - "common/_verify_required_crds"
+            - "prerequisites/prerequisite_operator_installation"
+            - "prerequisites/disconnected_environment_preparation"
+            - "secrets/generate_osp_secret"
+            - "secrets/generate_data_plane_secrets"
+            - "secrets/generate_ceph_secret"
+            - "storage/persistent_storage_configuration"
+            - "storage/trident_storage_configuration"
+            - "storage/_generate_storage_crs"
+            - "control_plane/openstack_operator_installation_and_preparation"
+            - "control_plane/rhocp_preparation_for_rhoso"
+            - "control_plane/control_plane_deployment_and_verification"
+            - "control_plane/control_plane_customization"
+            - "network/network_preparation"
+            - "data_plane/data_plane_deployment_and_verification"
+            - "post_deployment/post_deployment_validation"
+            - "post_deployment/observability_configuration"
+        - question_name: "CIQ File Path"
+          question_description: "Absolute path to the RHOSO CIQ Excel workbook (.xlsx)"
+          variable: "ciq_file_path"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Name"
+          question_description: "RHOSO cluster name (must match CIQ)"
+          variable: "cluster_name"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "RHOSO Version"
+          question_description: "RHOSO version to install"
+          variable: "rhoso_version"
+          type: "multiplechoice"
+          required: true
+          default: "18.0"
+          choices: ["18.0"]
+        - question_name: "Apply Manifests"
+          variable: "rhoso_apply_manifests"
+          type: "multiplechoice"
+          required: true
+          default: "true"
+          choices: ["true", "false"]
+        - question_name: "Skip Generation"
+          variable: "rhoso_skip_generation"
+          type: "multiplechoice"
+          required: true
+          default: "false"
+          choices: ["true", "false"]
+        - question_name: "Manifest Directory"
+          variable: "rhoso_manifest_dir"
+          type: "text"
+          required: false
+          default: ""
+
+  # =========================================================================
+  # 2. CPAT RHOSO Register — Cluster registration & CIQ validation
+  # =========================================================================
+  - name: "CPAT RHOSO Register"
+    description: >-
+      Register and validate a RHOSO cluster from its CIQ workbook.
+      Parses the CIQ, validates schema compliance, and registers the
+      cluster for deployment.
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/main.yml"
+    execution_environment: "CPAT EE"
+    credentials: []
+    job_tags: "register"
+    verbosity: 0
+    timeout: 600
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "RHOSO Registration Parameters"
+      description: "Register a RHOSO cluster from CIQ"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ciq_file_path"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Description"
+          variable: "cluster_description"
+          type: "text"
+          required: false
+          default: ""
+        - question_name: "Registration Target"
+          variable: "registration_target"
+          type: "multiplechoice"
+          required: true
+          default: "rhoso"
+          choices: ["rhoso", "ocp"]

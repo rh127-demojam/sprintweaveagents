@@ -1,0 +1,48 @@
+---
+# Verify OCP cluster health after installation.
+- name: Get cluster operator status
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get clusteroperators -o json"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_co_status
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Parse cluster operator status
+  ansible.builtin.set_fact:
+    ocp_co_degraded: >-
+      {{ (ocp_co_status.stdout | from_json).items
+         | selectattr('status.conditions', 'defined')
+         | map(attribute='metadata.name')
+         | list }}
+  when: ocp_apply_manifests | bool
+
+- name: Check for degraded cluster operators
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get co -o jsonpath='{range .items[*]}{.metadata.name}{\"\\t\"}{range .status.conditions[*]}{.type}={.status}{\" \"}{end}{\"\\n\"}{end}'"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_co_conditions
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Display cluster operator health
+  ansible.builtin.debug:
+    msg: "{{ ocp_co_conditions.stdout_lines | default(['Cluster operators check skipped — generate mode']) }}"
+
+- name: Get cluster version
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get clusterversion"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_cv_status
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Display cluster version
+  ansible.builtin.debug:
+    msg: "{{ ocp_cv_status.stdout_lines | default(['Version check skipped']) }}"

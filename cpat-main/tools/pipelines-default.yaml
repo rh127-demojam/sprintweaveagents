@@ -1,0 +1,247 @@
+# CPAT Built-in Pipeline Definitions (RHOSO + OCP)
+# Canonical source for built-in pipelines in the CPAT project.
+# For team customizations, use context/pipelines.yaml instead.
+#
+# Pipeline deliverables are ACTUAL FILES (source code, workbooks, scripts),
+# NOT just reference documents. Agents MUST generate working artifacts.
+# RDA/ODA use multi-pass sub-stages: Schema → Generator → Workbooks (shell).
+# RDE/ODE use multi-pass sub-stages: Ansible → Backend → Frontend → Docker.
+
+version: 2
+
+pipelines:
+  # ── RHOSO Pipelines ────────────────────────────────────────
+  - id: rhoso-delivery
+    name: "RHOSO Delivery"
+    command: "Run RHOSO delivery pipeline on @cpat"
+    stages:
+      - abbrev: RDA-1
+        agent: "RHOSO DA"
+        sub_stage: "Schema"
+        generates:
+          - "output/ciq-generators/rhoso_ciq_schema.py           — CIQ schema source code (18 tables, 210+ params, v1.4)"
+      - abbrev: RDA-2
+        agent: "RHOSO DA"
+        sub_stage: "Generator"
+        generates:
+          - "output/ciq-generators/generate_rhoso_ciq_workbooks.py — CIQ workbook generator (9 sheets, 14 conditional formatting rules, 20 dropdowns)"
+          - "output/ciq-generators/requirements.txt               — Python dependencies (openpyxl)"
+      - abbrev: RDA-3
+        agent: "RHOSO DA"
+        sub_stage: "Workbooks"
+        generates:
+          - "output/ciq-workbooks/rhoso/sample-rhoso.ciq.xlsx     — Pre-filled sample CIQ workbook (9 sheets)"
+          - "output/ciq-workbooks/rhoso/rhoso-ciq-template.xlsx   — Blank CIQ template for site data entry (9 sheets)"
+      - abbrev: RDE-1
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Ansible"
+        generates:
+          - "output/cpat/ansible/playbooks/main.yml                       — Main playbook entry point"
+          - "output/cpat/ansible/playbooks/roles/rhoso/tasks/             — 25 task files in 9 subdirs (common, prerequisites, secrets, storage, network, control_plane, data_plane, post_deployment, manifests)"
+          - "output/cpat/ansible/playbooks/roles/rhoso/templates/         — 19 Jinja2 templates (NNCP, NAD, MetalLB, NetConfig, ControlPlane, EDPM, NodeSet, Deployment, BMH, NMState, CPU CM, CatalogSource, IDMS, ITMS, OperatorHub, LSO, Observability, Trident, Multipath)"
+          - "output/cpat/ansible/playbooks/roles/rhoso/defaults/main.yml  — ~170 default variables (incl. Ceph, HA, FIPS, Trident, LSO, Observability, Multipath)"
+          - "output/cpat/ansible/library/                                  — parse_ciq.py, get_ciq_validation_schema.py"
+          - "output/cpat/ansible/module_utils/                             — rhoso_ciq_schema.py (v1.4), ocp_ciq_schema.py (v1.1), ciq_parser.py (unified RHOSO+OCP)"
+          - "output/cpat/ansible/playbooks/roles/register/tasks/          — Registration tasks"
+          - "output/cpat/ansible.cfg                                       — Ansible configuration"
+      - abbrev: RDE-2
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Backend"
+        generates:
+          - "output/cpat/backend/app.py             — Flask application (19 routes, streaming NDJSON)"
+          - "output/cpat/backend/models.py          — SQLAlchemy models (Cluster, Execution)"
+          - "output/cpat/backend/ciq_parser.py      — CIQ Excel parser with cross-sheet merging + header normalization"
+          - "output/cpat/backend/ansible_runner.py   — Ansible process runner — 19 task tags (incl. Ceph, Trident, LSO, Observability)"
+          - "output/cpat/backend/paths.py           — Runtime data directory management"
+          - "output/cpat/backend/input_files.py     — Input file spec (5 files: kubeconfig, pull-secret, etc.)"
+          - "output/cpat/backend/version.py         — YY.M.W calendar versioning"
+          - "output/cpat/backend/rhoso_ciq_schema.py — Re-export shim from ansible/module_utils/"
+          - "output/cpat/backend/requirements.txt   — Python dependencies"
+          - "output/cpat/backend/.gitignore          — Backend gitignore"
+      - abbrev: RDE-3
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Frontend"
+        generates:
+          - "output/cpat/frontend/src/components/Dashboard.jsx          — Overview dashboard"
+          - "output/cpat/frontend/src/components/RegisterCluster.jsx    — CIQ upload + registration"
+          - "output/cpat/frontend/src/components/RhosoInstallation.jsx  — RHOSO install page + deploy tasks incl. Ceph/Trident/LSO/Observability"
+          - "output/cpat/frontend/src/components/ManifestArtifactsPanel.jsx — Artifact review + ZIP download"
+          - "output/cpat/frontend/src/components/ExecutionTable.jsx     — Execution history"
+          - "output/cpat/frontend/src/components/Layout.jsx             — App shell + sidebar"
+          - "output/cpat/frontend/src/components/Login.jsx              — Authentication"
+          - "output/cpat/frontend/src/components/InputFilesModal.jsx    — Input file upload modal"
+          - "output/cpat/frontend/src/components/InstallationLogModal.jsx — Install log viewer"
+          - "output/cpat/frontend/src/components/RegistrationLogModal.jsx — Registration log viewer"
+          - "output/cpat/frontend/src/components/OcpDeploymentAutomation.jsx — OCP placeholder"
+          - "output/cpat/frontend/src/App.jsx, api.js, main.jsx, index.css, rhosoInputFiles.js"
+          - "output/cpat/frontend/package.json, vite.config.js, index.html"
+          - "output/cpat/frontend/nginx/default.conf                    — Nginx reverse proxy"
+          - "output/cpat/frontend/public/                               — Logo SVGs"
+          - "output/cpat/frontend/.gitignore"
+      - abbrev: RDE-4
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Docker"
+        generates:
+          - "output/cpat/Dockerfile       — Multi-stage build (Node 20 + Python 3.12 + Nginx)"
+          - "output/cpat/docker/entrypoint.sh — Gunicorn + Nginx startup"
+          - "output/cpat/bringup.sh       — Podman build & run with YY.M.W versioning"
+          - "output/cpat/.dockerignore    — Docker build exclusions"
+          - "output/cpat/USAGE.md         — Product documentation"
+
+  - id: rhoso-da
+    name: "RHOSO Design Architect"
+    command: "Run RHOSO DA pipeline on @cpat"
+    stages:
+      - abbrev: RDA-1
+        agent: "RHOSO DA"
+        sub_stage: "Schema"
+        generates:
+          - "output/ciq-generators/rhoso_ciq_schema.py — CIQ schema code (18 tables, 210+ params, v1.4)"
+      - abbrev: RDA-2
+        agent: "RHOSO DA"
+        sub_stage: "Generator"
+        generates:
+          - "output/ciq-generators/generate_rhoso_ciq_workbooks.py — Generator (9 sheets, conditional formatting)"
+          - "output/ciq-generators/requirements.txt"
+      - abbrev: RDA-3
+        agent: "RHOSO DA"
+        sub_stage: "Workbooks"
+        generates:
+          - "output/ciq-workbooks/rhoso/ — RHOSO CIQ workbooks (9 sheets each)"
+
+  - id: rhoso-de
+    name: "RHOSO Deployment Engineer"
+    command: "Run RHOSO DE pipeline on @cpat"
+    stages:
+      - abbrev: RDE-1
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Ansible"
+        generates:
+          - "output/cpat/ansible/ — Playbooks, roles, 25 tasks in 9 subdirs, 19 templates, ~170 defaults, v1.4 schema"
+          - "output/cpat/ansible.cfg"
+      - abbrev: RDE-2
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Backend"
+        generates:
+          - "output/cpat/backend/ — Flask API (19 routes), CIQ parser (cross-sheet), Ansible runner (19 task tags)"
+      - abbrev: RDE-3
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Frontend"
+        generates:
+          - "output/cpat/frontend/ — React UI (11 components), Vite, Nginx"
+      - abbrev: RDE-4
+        agent: "RHOSO Deployment Engineer"
+        sub_stage: "Docker"
+        generates:
+          - "output/cpat/Dockerfile, docker/, bringup.sh, USAGE.md"
+
+  # ── OCP Pipelines ──────────────────────────────────────────
+  - id: ocp-delivery
+    name: "OCP Delivery"
+    command: "Run OCP delivery pipeline on @cpat"
+    stages:
+      - abbrev: ODA-1
+        agent: "OCP DA"
+        sub_stage: "Schema"
+        generates:
+          - "output/ciq-generators/ocp_ciq_schema.py — OCP CIQ schema (14 param + 4 row tables, 177 fields, v1.1)"
+      - abbrev: ODA-2
+        agent: "OCP DA"
+        sub_stage: "Generator"
+        generates:
+          - "output/ciq-generators/generate_ocp_ciq_workbooks.py — OCP workbook generator (8 sheets)"
+          - "output/ciq-generators/requirements.txt"
+      - abbrev: ODA-3
+        agent: "OCP DA"
+        sub_stage: "Workbooks"
+        generates:
+          - "output/ciq-workbooks/ocp/sample-ocp.ciq.xlsx"
+          - "output/ciq-workbooks/ocp/ocp-ciq-template.xlsx"
+      - abbrev: ODE-1
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Ansible"
+        generates:
+          - "output/cpat/ansible/playbooks/roles/ocp/ — OCP role (9 subdirs, ~20 tasks, 12 templates, ~120 defaults)"
+          - "output/cpat/ansible/playbooks/ocp_install.yml"
+      - abbrev: ODE-2
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Backend"
+        generates:
+          - "output/cpat/backend/ciq_parser.py — Unified CIQ parser (RHOSO+OCP)"
+      - abbrev: ODE-3
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Frontend"
+        generates:
+          - "output/cpat/frontend/src/components/OcpInstallation.jsx — OCP installation UI"
+          - "output/cpat/frontend/src/ocpInputFiles.js"
+      - abbrev: ODE-4
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Docker"
+        generates:
+          - "output/cpat/Dockerfile, docker/, bringup.sh, USAGE.md — Updated with OCP support"
+
+  - id: ocp-da
+    name: "OCP Design Architect"
+    command: "Run OCP DA pipeline on @cpat"
+    stages:
+      - abbrev: ODA-1
+        agent: "OCP DA"
+        sub_stage: "Schema"
+        generates:
+          - "output/ciq-generators/ocp_ciq_schema.py"
+      - abbrev: ODA-2
+        agent: "OCP DA"
+        sub_stage: "Generator"
+        generates:
+          - "output/ciq-generators/generate_ocp_ciq_workbooks.py"
+          - "output/ciq-generators/requirements.txt"
+      - abbrev: ODA-3
+        agent: "OCP DA"
+        sub_stage: "Workbooks"
+        generates:
+          - "output/ciq-workbooks/ocp/"
+
+  - id: ocp-de
+    name: "OCP Deployment Engineer"
+    command: "Run OCP DE pipeline on @cpat"
+    stages:
+      - abbrev: ODE-1
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Ansible"
+        generates:
+          - "output/cpat/ansible/playbooks/roles/ocp/"
+      - abbrev: ODE-2
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Backend"
+        generates:
+          - "output/cpat/backend/ciq_parser.py"
+      - abbrev: ODE-3
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Frontend"
+        generates:
+          - "output/cpat/frontend/src/components/OcpInstallation.jsx"
+      - abbrev: ODE-4
+        agent: "OCP Deployment Engineer"
+        sub_stage: "Docker"
+        generates:
+          - "output/cpat/Dockerfile, docker/, bringup.sh"
+
+  # ── Full Delivery (RHOSO + OCP) ────────────────────────────
+  - id: full-delivery
+    name: "Full Delivery (RHOSO + OCP)"
+    command: "Run full delivery pipeline on @cpat"
+    stages:
+      - { abbrev: RDA-1, agent: "RHOSO DA",                  sub_stage: "Schema",    generates: ["output/ciq-generators/rhoso_ciq_schema.py"] }
+      - { abbrev: RDA-2, agent: "RHOSO DA",                  sub_stage: "Generator", generates: ["output/ciq-generators/generate_rhoso_ciq_workbooks.py", "output/ciq-generators/requirements.txt"] }
+      - { abbrev: RDA-3, agent: "RHOSO DA",                  sub_stage: "Workbooks", generates: ["output/ciq-workbooks/rhoso/"] }
+      - { abbrev: RDE-1, agent: "RHOSO Deployment Engineer",  sub_stage: "Ansible",  generates: ["output/cpat/ansible/playbooks/roles/rhoso/"] }
+      - { abbrev: RDE-2, agent: "RHOSO Deployment Engineer",  sub_stage: "Backend",  generates: ["output/cpat/backend/"] }
+      - { abbrev: RDE-3, agent: "RHOSO Deployment Engineer",  sub_stage: "Frontend", generates: ["output/cpat/frontend/"] }
+      - { abbrev: RDE-4, agent: "RHOSO Deployment Engineer",  sub_stage: "Docker",   generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh"] }
+      - { abbrev: ODA-1, agent: "OCP DA",                  sub_stage: "Schema",    generates: ["output/ciq-generators/ocp_ciq_schema.py"] }
+      - { abbrev: ODA-2, agent: "OCP DA",                  sub_stage: "Generator", generates: ["output/ciq-generators/generate_ocp_ciq_workbooks.py"] }
+      - { abbrev: ODA-3, agent: "OCP DA",                  sub_stage: "Workbooks", generates: ["output/ciq-workbooks/ocp/"] }
+      - { abbrev: ODE-1, agent: "OCP Deployment Engineer",  sub_stage: "Ansible",  generates: ["output/cpat/ansible/playbooks/roles/ocp/"] }
+      - { abbrev: ODE-2, agent: "OCP Deployment Engineer",  sub_stage: "Backend",  generates: ["output/cpat/backend/ciq_parser.py", "output/cpat/backend/ocp_ciq_schema.py"] }
+      - { abbrev: ODE-3, agent: "OCP Deployment Engineer",  sub_stage: "Frontend", generates: ["output/cpat/frontend/src/components/OcpDeploymentAutomation.jsx"] }
+      - { abbrev: ODE-4, agent: "OCP Deployment Engineer",  sub_stage: "Docker",   generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh"] }

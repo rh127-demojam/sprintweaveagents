@@ -1,0 +1,345 @@
+---
+# Shared CIQ / inventory context for all RHOSO installation tasks.
+- name: Verify RHOSO environment is in dynamic inventory
+  ansible.builtin.assert:
+    that:
+      - cluster_name is defined
+      - cluster_name | length > 0
+      - cluster_name in groups.get('rhoso_clusters', [])
+    fail_msg: >-
+      RHOSO environment '{{ cluster_name | default('') }}' not found in inventory.
+      Register a RHOSO CIQ (rhoso_details) first.
+
+- name: Load RHOSO CIQ parameters and related inventory facts
+  ansible.builtin.set_fact:
+    rhoso_ciq: "{{ hostvars[cluster_name].ciq_parameters | default({}) }}"
+    rhoso_networks: "{{ hostvars[cluster_name].rhoso_networks | default([]) }}"
+    rhoso_nodes: "{{ hostvars[cluster_name].rhoso_data_plane_nodes | default([]) }}"
+
+- name: Resolve RHOSO deployment settings from CIQ
+  ansible.builtin.set_fact:
+    rhoso_openstack_ns: "{{ rhoso_ciq['OpenStack Namespace'] | default('openstack') }}"
+    rhoso_operators_ns: "{{ rhoso_ciq['OpenStack Operators Namespace'] | default('openstack-operators') }}"
+    rhoso_kubeconfig: "{{ rhoso_ciq['Kubeconfig Path'] | default('') }}"
+    rhoso_storage_class: "{{ rhoso_ciq['Storage Class'] | default('') }}"
+    rhoso_storage_backend: "{{ rhoso_ciq['Storage Backend'] | default('') }}"
+    rhoso_deployment_mode: "{{ rhoso_ciq['Deployment Mode'] | default('connected') | lower }}"
+    rhoso_multi_env: "{{ rhoso_ciq['Multi Environment on Single RHOCP'] | default('no') | lower }}"
+    rhoso_control_plane_name: "{{ rhoso_ciq['Control Plane CR Name'] | default(rhoso_control_plane_name) }}"
+    rhoso_control_plane_fqdn: "{{ rhoso_ciq['Control Plane FQDN'] | default('') }}"
+    rhoso_public_vip: "{{ rhoso_ciq['Public VIP'] | default('') }}"
+    rhoso_osp_secret_name: "{{ rhoso_ciq['OSP Secret Name'] | default(rhoso_osp_secret_name) }}"
+    rhoso_nodeset_name: "{{ rhoso_ciq['Data Plane NodeSet Name'] | default(rhoso_nodeset_name) }}"
+    rhoso_deployment_name: "{{ rhoso_ciq['Data Plane Deployment Name'] | default(rhoso_deployment_name) }}"
+    rhoso_dp_mode: "{{ rhoso_ciq['Data Plane Provisioning Mode'] | default('pre-provisioned') | lower }}"
+    rhoso_dp_ssh_user: "{{ rhoso_ciq['Data Plane SSH User'] | default('cloud-admin') }}"
+    rhoso_dp_ssh_key: "{{ rhoso_ciq['Data Plane SSH Private Key Path'] | default('') }}"
+    rhoso_ansible_ssh_secret_name: "{{ rhoso_ciq['Ansible SSH Secret Name'] | default(rhoso_ansible_ssh_secret_name) }}"
+    rhoso_nova_migration_secret_name: "{{ rhoso_ciq['Nova Migration Secret Name'] | default(rhoso_nova_migration_secret_name) }}"
+    rhoso_subscription_secret_name: "{{ rhoso_ciq['Subscription Secret Name'] | default(rhoso_subscription_secret_name) }}"
+    rhoso_libvirt_secret_name: "{{ rhoso_ciq['Libvirt Secret Name'] | default(rhoso_libvirt_secret_name) }}"
+    rhoso_pull_secret: "{{ rhoso_ciq['Pull Secret Path'] | default('') }}"
+    rhoso_mirror_registry: "{{ rhoso_ciq['Mirror Registry URL'] | default('') }}"
+    rhoso_mirror_ca_path: "{{ rhoso_ciq['Mirror Registry CA Path'] | default('') }}"
+    rhoso_mirror_pull_secret: "{{ rhoso_ciq['Mirror Pull Secret Path'] | default(rhoso_ciq['Pull Secret Path'] | default('')) }}"
+    rhoso_idms_name: "{{ rhoso_ciq['ImageDigestMirrorSet Name'] | default(rhoso_ciq['ImageContentSourcePolicy Name'] | default('rhoso-idms')) }}"
+    rhoso_itms_name: "{{ rhoso_ciq['ImageTagMirrorSet Name'] | default('rhoso-itms') }}"
+    rhoso_icsp_name: "{{ rhoso_ciq['ImageContentSourcePolicy Name'] | default('') }}"
+    rhoso_disable_default_catsrc: "{{ rhoso_ciq['Disable Default CatalogSources'] | default('no') | lower }}"
+    rhoso_catsrc_name: "{{ rhoso_ciq['CatalogSource Name'] | default('redhat-operators') }}"
+    rhoso_catsrc_namespace: "{{ rhoso_ciq['CatalogSource Namespace'] | default('openshift-marketplace') }}"
+    rhoso_catsrc_image: "{{ rhoso_ciq['CatalogSource Image'] | default('') }}"
+    rhoso_operator_source: "{{ rhoso_ciq['Operator Source'] | default(rhoso_operator_source) }}"
+    rhoso_operator_source_ns: "{{ rhoso_ciq['Operator Source Namespace'] | default('openshift-marketplace') }}"
+    rhoso_mirror_osp_path: "{{ rhoso_ciq['Mirrored Registry OpenStack Path'] | default('rh-osbs/rhosp18') }}"
+    rhoso_dp_container_registry: "{{ rhoso_ciq['Data Plane Container Registry'] | default('') }}"
+    rhoso_dp_yum_mirror: "{{ rhoso_ciq['Data Plane YUM Mirror URL'] | default('') }}"
+    rhoso_satellite_url: "{{ rhoso_ciq['Satellite Capsule URL'] | default('') }}"
+    rhoso_sub_method: "{{ rhoso_ciq['Subscription Method'] | default('activation_key') | lower }}"
+    rhoso_rh_org: "{{ rhoso_ciq['Red Hat Organization ID'] | default('') }}"
+    rhoso_rh_activation_key: "{{ rhoso_ciq['Red Hat Activation Key'] | default('') }}"
+    rhoso_rh_username: "{{ rhoso_ciq['Red Hat Username'] | default('') }}"
+    rhoso_ovn_gateway: "{{ rhoso_ciq['OVN Gateway Placement'] | default('control-plane') }}"
+    rhoso_worker_iface: "{{ rhoso_ciq['Worker NNCP Interface'] | default('') }}"
+    rhoso_mgmt_net: "{{ rhoso_ciq['Management Network Name'] | default('') }}"
+    rhoso_internalapi_net: "{{ rhoso_ciq['Internal API Network Name'] | default('') }}"
+    rhoso_metallb_ns: "{{ rhoso_ciq['MetalLB Namespace'] | default('metallb-system') }}"
+    rhoso_nad_cni_version: "{{ rhoso_ciq['NAD CNI Version'] | default('0.3.1') }}"
+    rhoso_physical_bridge_name: "{{ rhoso_ciq['Physical Bridge Name'] | default('br-ex') }}"
+    rhoso_edpm_net_topology: "{{ rhoso_ciq['EDPM Network Config Topology'] | default('dual_nic_bond') | lower }}"
+    rhoso_edpm_net_nmstate: "{{ rhoso_ciq['EDPM Network Config Nmstate'] | default('yes') | lower }}"
+    rhoso_edpm_net_update: "{{ rhoso_ciq['EDPM Network Config Update'] | default('no') | lower }}"
+    rhoso_edpm_bridge_type: "{{ rhoso_ciq['EDPM Bridge Type'] | default('ovs_bridge') | lower }}"
+    rhoso_edpm_nic1_name: "{{ rhoso_ciq['EDPM NIC1 Name'] | default('nic1') }}"
+    rhoso_edpm_nic2_name: "{{ rhoso_ciq['EDPM NIC2 Name'] | default('nic2') }}"
+    rhoso_edpm_bond_name: "{{ rhoso_ciq['EDPM Bond Name'] | default('bond0') }}"
+    rhoso_edpm_bonding_options: >-
+      {{
+        rhoso_ciq['EDPM Bonding Options']
+        | default('mode=802.3ad lacp_rate=fast updelay=1000 miimon=100 xmit_hash_policy=layer3+4')
+      }}
+    rhoso_edpm_use_dhcp: "{{ rhoso_ciq['EDPM Use DHCP'] | default('no') | lower }}"
+    rhoso_edpm_use_dhcpv6: "{{ rhoso_ciq['EDPM Use DHCPv6'] | default('no') | lower }}"
+    rhoso_edpm_dpdk_mtu: "{{ rhoso_ciq['EDPM DPDK MTU'] | default('9000') }}"
+    rhoso_edpm_dpdk_rx_queue: "{{ rhoso_ciq['EDPM DPDK RX Queue'] | default('1') }}"
+    rhoso_edpm_dpdk_ovs_extra: "{{ rhoso_ciq['EDPM DPDK OVS Extra'] | default('set port bond0 bond_mode=balance-slb') }}"
+    rhoso_registry_secret_name: "{{ rhoso_ciq['Registry Secret Name'] | default('') }}"
+    rhoso_product_version: "{{ rhoso_version | default(rhoso_ciq['RHOSO Version'] | default('18.0')) }}"
+    # --- Control plane service settings ---
+    rhoso_tls_pod_level: "{{ rhoso_ciq['TLS Pod Level Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_operator_channel: "{{ rhoso_ciq['Operator Channel'] | default(rhoso_operator_channel) }}"
+    rhoso_operator_install_plan: "{{ rhoso_ciq['Operator Install Plan Approval'] | default('Automatic') }}"
+    rhoso_dns_vip: "{{ rhoso_ciq['DNS VIP'] | default('') }}"
+    rhoso_dns_upstream_servers: "{{ rhoso_ciq['DNS Upstream Servers'] | default('') }}"
+    rhoso_worker_dns_servers: "{{ rhoso_ciq['Worker DNS Servers'] | default('') }}"
+    # --- Service enable/disable ---
+    rhoso_horizon_enabled: "{{ rhoso_ciq['Horizon Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_heat_enabled: "{{ rhoso_ciq['Heat Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_telemetry_enabled: "{{ rhoso_ciq['Telemetry Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_barbican_enabled: "{{ rhoso_ciq['Barbican Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_octavia_enabled: "{{ rhoso_ciq['Octavia Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_designate_enabled: "{{ rhoso_ciq['Designate Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_ironic_enabled: "{{ rhoso_ciq['Ironic Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_manila_enabled: "{{ rhoso_ciq['Manila Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    # --- Service replicas ---
+    rhoso_glance_backend: "{{ rhoso_ciq['Glance Backend'] | default('') }}"
+    rhoso_glance_replicas: "{{ rhoso_ciq['Glance Replicas'] | default('1') }}"
+    rhoso_nova_api_replicas: "{{ rhoso_ciq['Nova API Replicas'] | default('1') }}"
+    rhoso_nova_scheduler_replicas: "{{ rhoso_ciq['Nova Scheduler Replicas'] | default('1') }}"
+    rhoso_nova_conductor_cell0_replicas: "{{ rhoso_ciq['Nova Conductor Cell0 Replicas'] | default('1') }}"
+    rhoso_nova_conductor_cell1_replicas: "{{ rhoso_ciq['Nova Conductor Cell1 Replicas'] | default('1') }}"
+    rhoso_nova_metadata_enabled: "{{ rhoso_ciq['Nova Metadata Enabled'] | default('yes') | lower in ['yes', 'true', '1'] }}"
+    rhoso_nova_cell1_metadata_replicas: "{{ rhoso_ciq['Nova Cell1 Metadata Replicas'] | default('1') }}"
+    rhoso_nova_cell1_novnc_replicas: "{{ rhoso_ciq['Nova Cell1 noVNC Replicas'] | default('1') }}"
+    rhoso_neutron_replicas: "{{ rhoso_ciq['Neutron Replicas'] | default('1') }}"
+    rhoso_keystone_replicas: "{{ rhoso_ciq['Keystone Replicas'] | default('1') }}"
+    rhoso_cinder_api_replicas: "{{ rhoso_ciq['Cinder API Replicas'] | default('1') }}"
+    rhoso_cinder_scheduler_replicas: "{{ rhoso_ciq['Cinder Scheduler Replicas'] | default('1') }}"
+    rhoso_barbican_api_replicas: "{{ rhoso_ciq['Barbican API Replicas'] | default('1') }}"
+    rhoso_barbican_worker_replicas: "{{ rhoso_ciq['Barbican Worker Replicas'] | default('1') }}"
+    rhoso_placement_replicas: "{{ rhoso_ciq['Placement Replicas'] | default('1') }}"
+    rhoso_horizon_replicas: "{{ rhoso_ciq['Horizon Replicas'] | default('1') }}"
+    rhoso_heat_api_replicas: "{{ rhoso_ciq['Heat API Replicas'] | default('1') }}"
+    rhoso_heat_engine_replicas: "{{ rhoso_ciq['Heat Engine Replicas'] | default('1') }}"
+    rhoso_memcached_replicas: "{{ rhoso_ciq['Memcached Replicas'] | default('1') }}"
+    rhoso_galera_replicas: "{{ rhoso_ciq['Galera Replicas'] | default('1') }}"
+    rhoso_galera_cell1_replicas: "{{ rhoso_ciq['Galera Cell1 Replicas'] | default('1') }}"
+    rhoso_rabbitmq_replicas: "{{ rhoso_ciq['RabbitMQ Replicas'] | default('3') }}"
+    rhoso_rabbitmq_cell1_replicas: "{{ rhoso_ciq['RabbitMQ Cell1 Replicas'] | default('3') }}"
+    rhoso_dns_replicas: "{{ rhoso_ciq['DNS Replicas'] | default('1') }}"
+    rhoso_ovn_nb_replicas: "{{ rhoso_ciq['OVN NB Replicas'] | default('3') }}"
+    rhoso_ovn_sb_replicas: "{{ rhoso_ciq['OVN SB Replicas'] | default('3') }}"
+    # --- PV sizing ---
+    rhoso_galera_storage: "{{ rhoso_ciq['Galera Storage Request'] | default('5G') }}"
+    rhoso_galera_cell1_storage: "{{ rhoso_ciq['Galera Cell1 Storage Request'] | default('5G') }}"
+    rhoso_ovn_nb_storage: "{{ rhoso_ciq['OVN NB Storage Request'] | default('10G') }}"
+    rhoso_ovn_sb_storage: "{{ rhoso_ciq['OVN SB Storage Request'] | default('10G') }}"
+    rhoso_telemetry_storage: "{{ rhoso_ciq['Telemetry Storage Request'] | default('20G') }}"
+    rhoso_telemetry_storage_class: "{{ rhoso_ciq['Telemetry Storage Class'] | default('') }}"
+    rhoso_telemetry_retention: "{{ rhoso_ciq['Telemetry Retention'] | default('24h') }}"
+    rhoso_telemetry_scrape_interval: "{{ rhoso_ciq['Telemetry Scrape Interval'] | default('30s') }}"
+    rhoso_rabbitmq_cpu_limit: "{{ rhoso_ciq['RabbitMQ CPU Limit'] | default('') }}"
+    rhoso_rabbitmq_memory_limit: "{{ rhoso_ciq['RabbitMQ Memory Limit'] | default('') }}"
+    # --- Cinder backend ---
+    rhoso_cinder_default_volume_type: "{{ rhoso_ciq['Cinder Default Volume Type'] | default('') }}"
+    rhoso_cinder_volume_backend_name: "{{ rhoso_ciq['Cinder Volume Backend Name'] | default('') }}"
+    rhoso_cinder_volume_driver: "{{ rhoso_ciq['Cinder Volume Driver'] | default('') }}"
+    rhoso_cinder_storage_protocol: "{{ rhoso_ciq['Cinder Storage Protocol'] | default('') }}"
+    rhoso_cinder_netapp_hostname: "{{ rhoso_ciq['Cinder NetApp Server Hostname'] | default('') }}"
+    rhoso_cinder_netapp_vserver: "{{ rhoso_ciq['Cinder NetApp Vserver'] | default('') }}"
+    rhoso_cinder_volume_secret: "{{ rhoso_ciq['Cinder Volume Secret Name'] | default('') }}"
+    rhoso_cinder_volume_net_attachments: "{{ rhoso_ciq['Cinder Volume Network Attachments'] | default('') }}"
+    # --- Neutron custom config ---
+    rhoso_neutron_global_physnet_mtu: "{{ rhoso_ciq['Neutron Global Physnet MTU'] | default('') }}"
+    rhoso_neutron_physical_network_mtus: "{{ rhoso_ciq['Neutron Physical Network MTUs'] | default('') }}"
+    rhoso_neutron_api_timeout: "{{ rhoso_ciq['Neutron API Timeout'] | default('') }}"
+    rhoso_ovn_emit_need_to_frag: "{{ rhoso_ciq['OVN Emit Need To Frag'] | default('') }}"
+    rhoso_mac_binding_age_threshold: "{{ rhoso_ciq['MAC Binding Age Threshold'] | default('') }}"
+    # --- Messaging bus ---
+    rhoso_messaging_bus_cluster: "{{ rhoso_ciq['Messaging Bus Cluster'] | default('rabbitmq') }}"
+    rhoso_notifications_bus_cluster: "{{ rhoso_ciq['Notifications Bus Cluster'] | default('rabbitmq') }}"
+    # --- FIPS ---
+    rhoso_fips_enabled: "{{ rhoso_ciq['FIPS Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    # --- Ceph Storage ---
+    rhoso_ceph_external: "{{ rhoso_ciq['Ceph External'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_ceph_cluster_name: "{{ rhoso_ciq['Ceph Cluster Name'] | default('ceph') }}"
+    rhoso_ceph_fsid: "{{ rhoso_ciq['Ceph FSID'] | default('') }}"
+    rhoso_ceph_mon_host: "{{ rhoso_ciq['Ceph Mon Host'] | default('') }}"
+    rhoso_ceph_client_name: "{{ rhoso_ciq['Ceph Client Name'] | default('openstack') }}"
+    rhoso_ceph_client_key_path: "{{ rhoso_ciq['Ceph Client Key Path'] | default('') }}"
+    rhoso_ceph_pool_volumes: "{{ rhoso_ciq['Ceph Pool Volumes'] | default('volumes') }}"
+    rhoso_ceph_pool_images: "{{ rhoso_ciq['Ceph Pool Images'] | default('images') }}"
+    rhoso_ceph_pool_vms: "{{ rhoso_ciq['Ceph Pool VMs'] | default('vms') }}"
+    rhoso_ceph_rgw_enabled: "{{ rhoso_ciq['Ceph RGW Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_ceph_rgw_endpoint: "{{ rhoso_ciq['Ceph RGW Endpoint'] | default('') }}"
+    rhoso_ceph_rgw_tls: "{{ rhoso_ciq['Ceph RGW TLS Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    # --- Watcher service ---
+    rhoso_watcher_enabled: "{{ rhoso_ciq['Watcher Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    # --- HA Operators ---
+    rhoso_node_health_check_enabled: "{{ rhoso_ciq['Node Health Check Operator Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_self_node_remediation_enabled: "{{ rhoso_ciq['Self Node Remediation Operator Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_fence_agents_remediation_enabled: "{{ rhoso_ciq['Fence Agents Remediation Operator Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    # --- LSO (v1.4) ---
+    rhoso_lso_enabled: "{{ rhoso_ciq['LSO Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_lso_storage_class: "{{ rhoso_ciq['LSO Storage Class Name'] | default('local-storage') }}"
+    rhoso_lso_device_types: "{{ rhoso_ciq['LSO Device Types'] | default('disk') }}"
+    rhoso_lso_device_mechanical: "{{ rhoso_ciq['LSO Device Mechanical Properties'] | default('NonRotational') }}"
+    rhoso_lso_min_size: "{{ rhoso_ciq['LSO Min Device Size'] | default('100Gi') }}"
+    rhoso_lso_volume_mode: "{{ rhoso_ciq['LSO Volume Mode'] | default('Block') }}"
+    rhoso_lso_node_selector_label: "{{ rhoso_ciq['LSO Node Selector Label'] | default('cluster.ocs.openshift.io/openshift-storage') }}"
+    # --- Observability (v1.4) ---
+    rhoso_observability_enabled: "{{ rhoso_ciq['Observability Enabled'] | default(rhoso_ciq['Cluster Observability Enabled'] | default('no')) | lower in ['yes', 'true', '1'] }}"
+    rhoso_observability_channel: "{{ rhoso_ciq['Observability Operator Channel'] | default('stable') }}"
+    rhoso_observability_install_plan_approval: "{{ rhoso_ciq['Observability Install Plan Approval'] | default('Automatic') }}"
+    rhoso_monitoring_stack_enabled: "{{ rhoso_ciq['Observability Monitoring Stack Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_monitoring_stack_name: "{{ rhoso_ciq['Observability Monitoring Stack Name'] | default('rhoso-monitoring') }}"
+    # --- Trident (v1.4) ---
+    rhoso_trident_enabled: "{{ rhoso_ciq['Trident Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_trident_image_registry: "{{ rhoso_ciq['Trident Image Registry'] | default('') }}"
+    rhoso_trident_image: "{{ rhoso_ciq['Trident Image'] | default('') }}"
+    rhoso_trident_autosupport_image: "{{ rhoso_ciq['Trident Autosupport Image'] | default('') }}"
+    rhoso_trident_backend_name: "{{ rhoso_ciq['Trident Backend Name'] | default('ontap-backend') }}"
+    rhoso_trident_storage_driver: "{{ rhoso_ciq['Trident Storage Driver Name'] | default('ontap-san') }}"
+    rhoso_trident_mgmt_lif: "{{ rhoso_ciq['Trident Management LIF'] | default('') }}"
+    rhoso_trident_data_lif: "{{ rhoso_ciq['Trident Data LIF'] | default('') }}"
+    rhoso_trident_svm: "{{ rhoso_ciq['Trident SVM'] | default('') }}"
+    rhoso_trident_secret_name: "{{ rhoso_ciq['Trident Secret Name'] | default('backend-ontap-secret') }}"
+    rhoso_trident_storage_class: "{{ rhoso_ciq['Trident Storage Class Name'] | default('ontap-gold') }}"
+    rhoso_trident_volume_binding_mode: "{{ rhoso_ciq['Trident Volume Binding Mode'] | default('Immediate') }}"
+    # --- Multipath (v1.4) ---
+    rhoso_multipath_enabled: "{{ rhoso_ciq['Multipath Enabled'] | default('no') | lower in ['yes', 'true', '1'] }}"
+    rhoso_multipath_secret_name: "{{ rhoso_ciq['Multipath Config Secret Name'] | default('multipath-config') }}"
+    rhoso_multipath_user_friendly_names: "{{ rhoso_ciq['Multipath User Friendly Names'] | default('yes') }}"
+    rhoso_multipath_find_multipaths: "{{ rhoso_ciq['Multipath Find Multipaths'] | default('yes') }}"
+    # --- EDPM performance tuning ---
+    rhoso_edpm_ovn_bridge_mappings: "{{ rhoso_ciq['EDPM OVN Bridge Mappings'] | default('datacentre:br-ex') }}"
+    rhoso_edpm_tuned_profile: "{{ rhoso_ciq['EDPM Tuned Profile'] | default('') }}"
+    rhoso_edpm_kernel_args: "{{ rhoso_ciq['EDPM Kernel Args'] | default('') }}"
+    rhoso_edpm_cpu_dedicated_set: "{{ rhoso_ciq['EDPM CPU Dedicated Set'] | default('') }}"
+    rhoso_edpm_reserved_host_memory_mb: "{{ rhoso_ciq['EDPM Reserved Host Memory MB'] | default('') }}"
+    rhoso_edpm_initial_cpu_allocation_ratio: "{{ rhoso_ciq['EDPM Initial CPU Allocation Ratio'] | default('') }}"
+    rhoso_edpm_sshd_allowed_ranges: "{{ rhoso_ciq['EDPM SSHD Allowed Ranges'] | default('') }}"
+    rhoso_edpm_bootstrap_command: "{{ rhoso_ciq['EDPM Bootstrap Command'] | default('') }}"
+
+- name: Normalize EDPM yes/no flags and bond member type
+  ansible.builtin.set_fact:
+    rhoso_edpm_net_nmstate: "{{ rhoso_edpm_net_nmstate in ['yes', 'true', '1', true] }}"
+    rhoso_edpm_net_update: "{{ rhoso_edpm_net_update in ['yes', 'true', '1', true] }}"
+    rhoso_edpm_use_dhcp: "{{ rhoso_edpm_use_dhcp in ['yes', 'true', '1', true] }}"
+    rhoso_edpm_use_dhcpv6: "{{ rhoso_edpm_use_dhcpv6 in ['yes', 'true', '1', true] }}"
+    rhoso_edpm_bond_type: >-
+      {{
+        'ovs_bond'
+        if (rhoso_edpm_net_topology == 'ovs_bond')
+        else 'linux_bond'
+      }}
+
+- name: Resolve management / internal-API network names from Purpose when unset
+  ansible.builtin.set_fact:
+    rhoso_mgmt_net: >-
+      {{
+        rhoso_mgmt_net
+        if (rhoso_mgmt_net | length > 0)
+        else (
+          (
+            rhoso_networks
+            | selectattr('Purpose', 'defined')
+            | selectattr('Purpose', 'match', '(?i)^\\s*control\\s*plane')
+            | map(attribute='Network Name')
+            | list
+            | first
+            | default('')
+          )
+        )
+      }}
+    rhoso_internalapi_net: >-
+      {{
+        rhoso_internalapi_net
+        if (rhoso_internalapi_net | length > 0)
+        else (
+          (
+            rhoso_networks
+            | selectattr('Purpose', 'defined')
+            | selectattr('Purpose', 'match', '(?i)^\\s*internal\\s*api')
+            | map(attribute='Network Name')
+            | list
+            | first
+            | default('')
+          )
+        )
+      }}
+
+- name: Derive disconnected mode flag and effective registries
+  ansible.builtin.set_fact:
+    rhoso_is_disconnected: >-
+      {{ rhoso_deployment_mode in ['disconnected', 'airgapped', 'offline'] }}
+    rhoso_effective_dp_registry: >-
+      {{
+        rhoso_dp_container_registry
+        if (rhoso_dp_container_registry | length > 0)
+        else (
+          (rhoso_mirror_registry ~ '/' ~ rhoso_mirror_osp_path)
+          if (rhoso_mirror_registry | length > 0) else ''
+        )
+      }}
+
+- name: Ensure RHOSO manifest work directory exists
+  ansible.builtin.file:
+    path: "{{ rhoso_manifest_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+
+- name: Detect oc CLI and kubeconfig availability
+  ansible.builtin.set_fact:
+    rhoso_oc_env:
+      KUBECONFIG: "{{ rhoso_kubeconfig }}"
+    # Mutating oc apply / wait — generate-only sets rhoso_apply_manifests=false
+    rhoso_can_apply: >-
+      {{
+        rhoso_apply_manifests | bool
+        and (rhoso_kubeconfig | length > 0)
+      }}
+    rhoso_skip_generation: "{{ rhoso_skip_generation | default(false) | bool }}"
+
+- name: Check kubeconfig file when path is set (apply required; generate optional)
+  ansible.builtin.stat:
+    path: "{{ rhoso_kubeconfig }}"
+  register: rhoso_kubeconfig_stat
+  delegate_to: localhost
+  when: rhoso_kubeconfig | length > 0
+
+- name: Assert kubeconfig exists when applying manifests
+  ansible.builtin.assert:
+    that:
+      - rhoso_kubeconfig_stat.stat.exists | default(false)
+      - rhoso_kubeconfig_stat.stat.isreg | default(false)
+    fail_msg: >-
+      Kubeconfig not found at '{{ rhoso_kubeconfig }}'.
+      Set a valid 'Kubeconfig Path' (or upload via UI) before Deploy / apply.
+      Generate Manifests for Review does not require a reachable kubeconfig.
+  when: rhoso_can_apply | bool
+
+- name: Set read-only query gate (best-effort; file must exist)
+  ansible.builtin.set_fact:
+    # Generate may run without kubeconfig; query only if the file is present
+    rhoso_can_query: >-
+      {{
+        (rhoso_kubeconfig | length > 0)
+        and (rhoso_kubeconfig_stat.stat.exists | default(false) | bool)
+        and (rhoso_kubeconfig_stat.stat.isreg | default(false) | bool)
+      }}
+
+- name: Note when generate proceeds without cluster query
+  ansible.builtin.debug:
+    msg: >-
+      Kubeconfig Path is unset or the file is not available on this host —
+      generating manifests without cluster queries (NNCP worker list may be empty).
+      Deploy still requires a valid kubeconfig.
+  when:
+    - not (rhoso_apply_manifests | bool)
+    - not (rhoso_can_query | bool)
+
+- name: Validate every CIQ field against type / regexp schema
+  ansible.builtin.include_tasks: common/_validate_ciq.yml
+  when: rhoso_validate_ciq | default(true) | bool

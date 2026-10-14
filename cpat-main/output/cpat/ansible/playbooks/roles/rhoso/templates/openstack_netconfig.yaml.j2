@@ -1,0 +1,28 @@
+apiVersion: network.openstack.org/v1beta1
+kind: NetConfig
+metadata:
+  name: openstacknetconfig
+  namespace: {{ rhoso_openstack_ns }}
+spec:
+  networks:
+{% for net in rhoso_networks %}
+    - name: {{ net['Network Name'] }}
+      dnsDomain: {{ net['DNS Domain'] }}
+      subnets:
+        - name: {{ net['Subnet Name'] }}
+          cidr: {{ net['CIDR'] }}
+{% if (net['Allocation Start'] | default('') | string) | length > 0 and (net['Allocation End'] | default('') | string) | length > 0 %}
+          allocationRanges:
+            - start: {{ net['Allocation Start'] }}
+              end: {{ net['Allocation End'] }}
+{% endif %}
+{% if (net['Gateway'] | default('') | string) | length > 0 %}
+          gateway: {{ net['Gateway'] }}
+{% endif %}
+{% if (net['VLAN'] | default('') | string) | length > 0 %}
+          vlan: {{ net['VLAN'] | int }}
+{% endif %}
+{% if (net['MTU'] | default('') | string) | length > 0 %}
+          mtu: {{ net['MTU'] | int }}
+{% endif %}
+{% endfor %}

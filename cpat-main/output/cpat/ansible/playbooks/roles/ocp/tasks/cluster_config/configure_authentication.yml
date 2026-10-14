@@ -1,0 +1,30 @@
+---
+# Configure initial cluster authentication and export credentials.
+- name: Verify cluster access with kubeadmin
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} whoami"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_whoami
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Display current user
+  ansible.builtin.debug:
+    msg: "Logged in as: {{ ocp_whoami.stdout | default('N/A — generate mode') }}"
+
+- name: Get cluster version
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get clusterversion version -o jsonpath='{.status.desired.version}'"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_cluster_version
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Display cluster version
+  ansible.builtin.debug:
+    msg: "Cluster version: {{ ocp_cluster_version.stdout | default('N/A') }}"
+  when: ocp_apply_manifests | bool

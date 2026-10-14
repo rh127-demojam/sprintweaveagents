@@ -1,0 +1,30 @@
+{# Cluster Observability Operator resources (v1.4)
+   Renders: Namespace + OperatorGroup + Subscription for Cluster Observability Operator
+   Source: JIO D0.5_ObservabilityOperator/ artifacts
+   Conditional: rendered when rhoso_observability_enabled is true #}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ rhoso_observability_namespace }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cluster-observability-operator
+  namespace: {{ rhoso_observability_namespace }}
+spec:
+  targetNamespaces:
+    - {{ rhoso_observability_namespace }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cluster-observability-operator
+  namespace: {{ rhoso_observability_namespace }}
+spec:
+  name: cluster-observability-operator
+  channel: {{ rhoso_observability_channel | default('stable') }}
+  source: {{ rhoso_prereq_operator_source }}
+  sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+  installPlanApproval: {{ rhoso_observability_install_plan_approval | default('Automatic') }}

@@ -1,0 +1,69 @@
+---
+# Phase 1 — Render all reviewable manifests from CIQ (no oc apply).
+# Engineers review/download artifacts, then run deployment tasks with
+# rhoso_skip_generation=true so apply uses the reviewed files.
+
+- name: Manifest generation — document scope
+  ansible.builtin.debug:
+    msg:
+      - "Generate Manifests for Review (no cluster apply)"
+      - "Output directory: {{ rhoso_manifest_dir }}"
+      - "Disconnected templates: {{ rhoso_is_disconnected | bool }}"
+      - "LSO enabled: {{ rhoso_lso_enabled | bool }}"
+      - "Trident enabled: {{ rhoso_trident_enabled | bool }}"
+      - "Observability enabled: {{ rhoso_observability_enabled | bool }}"
+      - "Multipath enabled: {{ rhoso_multipath_enabled | bool }}"
+      - "Next: review/download in UI, then run deployment tasks"
+
+- name: Manifest generation — force generate-only (no apply)
+  ansible.builtin.assert:
+    that:
+      - not (rhoso_apply_manifests | bool)
+    fail_msg: >-
+      Manifest generation must run with rhoso_apply_manifests=false.
+      Use the UI "Generate Manifests for Review" action.
+
+- name: Manifest generation — render disconnected CRs when disconnected
+  ansible.builtin.include_tasks: manifests/_generate_disconnected_crs.yml
+  when: rhoso_is_disconnected | bool
+
+- name: Manifest generation — skip disconnected templates (connected mode)
+  ansible.builtin.debug:
+    msg: >-
+      Deployment Mode is connected — skipping ImageDigestMirrorSet / CatalogSource templates.
+  when: not (rhoso_is_disconnected | bool)
+
+- name: Manifest generation — render Ceph secret when Ceph External is enabled
+  ansible.builtin.include_tasks: secrets/generate_ceph_secret.yml
+  when: rhoso_ceph_external | bool
+
+- name: Manifest generation — render network + control-plane CRs
+  ansible.builtin.include_tasks: control_plane/_generate_control_plane_crs.yml
+
+- name: Manifest generation — render data-plane CRs
+  ansible.builtin.include_tasks: data_plane/_generate_data_plane_crs.yml
+
+- name: Manifest generation — render storage CRs (LSO, Trident, multipath)
+  ansible.builtin.include_tasks: storage/_generate_storage_crs.yml
+  when: >-
+    (rhoso_lso_enabled | bool)
+    or (rhoso_trident_enabled | bool)
+    or (rhoso_multipath_enabled | bool)
+
+- name: Manifest generation — list rendered files
+  ansible.builtin.find:
+    paths: "{{ rhoso_manifest_dir }}"
+    patterns:
+      - "*.yaml"
+      - "*.yml"
+      - "*.j2"
+      - "*.md"
+  register: rhoso_generated_files
+  delegate_to: localhost
+
+- name: Manifest generation — summary for review
+  ansible.builtin.debug:
+    msg:
+      - "Rendered {{ rhoso_generated_files.files | length }} file(s) under {{ rhoso_manifest_dir }}:"
+      - "{{ rhoso_generated_files.files | map(attribute='path') | map('basename') | list }}"
+      - "Review in CPAT → RHOSO Installation → Review manifests, then run Deploy tasks."

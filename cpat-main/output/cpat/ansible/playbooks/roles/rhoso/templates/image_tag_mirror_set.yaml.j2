@@ -1,0 +1,15 @@
+apiVersion: config.openshift.io/v1
+kind: ImageTagMirrorSet
+metadata:
+  name: {{ rhoso_itms_name | replace('_', '-') }}
+spec:
+  imageTagMirrors:
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/redhat
+      source: registry.redhat.io
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/{{ rhoso_mirror_osp_path }}
+      source: registry.redhat.io/rhosp-rhel9
+    - mirrors:
+        - {{ rhoso_mirror_registry }}/olm
+      source: registry.redhat.io/redhat

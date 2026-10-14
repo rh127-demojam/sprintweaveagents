@@ -1,0 +1,739 @@
+---
+# Deploying RHOSO 18.0 — Pre-requisite Operator Installation
+# Installs NMState, MetalLB, and Cert-Manager Operators via OLM Subscriptions.
+# Reference: RHOSO 18.0 "Planning your deployment" & "Deploying Ch.1 prerequisites"
+#
+# Each operator follows the pattern:
+#   1) Create Namespace (if not default)
+#   2) Create OperatorGroup
+#   3) Create Subscription (channel, source, approval)
+#   4) Approve InstallPlan (Manual approval)
+#   5) Wait for CSV Succeeded
+
+- name: Prerequisite Operators — document steps
+  ansible.builtin.debug:
+    msg:
+      - "Prerequisite Operator Installation (NMState, MetalLB, Cert-Manager)"
+      - "Reference: RHOSO 18.0 Planning + Deploying prerequisites"
+      - "Mode: {{ rhoso_deployment_mode }}"
+      - "Operator source: {{ rhoso_prereq_operator_source }}"
+      - "Install plan approval: {{ rhoso_prereq_install_plan_approval }}"
+
+# ---------------------------------------------------------------------------
+# NMState Operator
+# ---------------------------------------------------------------------------
+
+- name: NMState Operator — create Namespace
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      labels:
+        kubernetes.io/metadata.name: {{ rhoso_nmstate_namespace }}
+        name: {{ rhoso_nmstate_namespace }}
+      name: {{ rhoso_nmstate_namespace }}
+    spec:
+      finalizers:
+      - kubernetes
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nmstate_ns
+  changed_when: "'created' in rhoso_nmstate_ns.stdout or 'configured' in rhoso_nmstate_ns.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: NMState Operator — create OperatorGroup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      annotations:
+        olm.providedAPIs: NMState.v1.nmstate.io
+      name: openshift-nmstate
+      namespace: {{ rhoso_nmstate_namespace }}
+    spec:
+      targetNamespaces:
+      - {{ rhoso_nmstate_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nmstate_og
+  changed_when: "'created' in rhoso_nmstate_og.stdout or 'configured' in rhoso_nmstate_og.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: NMState Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      labels:
+        operators.coreos.com/kubernetes-nmstate-operator.openshift-nmstate: ""
+      name: kubernetes-nmstate-operator
+      namespace: {{ rhoso_nmstate_namespace }}
+    spec:
+      channel: {{ rhoso_nmstate_channel }}
+      installPlanApproval: {{ rhoso_prereq_install_plan_approval }}
+      name: kubernetes-nmstate-operator
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nmstate_sub
+  changed_when: "'created' in rhoso_nmstate_sub.stdout or 'configured' in rhoso_nmstate_sub.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: NMState Operator — approve InstallPlan
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for i in $(seq 1 60); do
+      plan=$(oc get installplan -n {{ rhoso_nmstate_namespace }} -o json \
+        | jq -r '.items[] | select(.spec.approval=="Manual" and .spec.approved==false) | .metadata.name' \
+        | head -n1)
+      if [[ -n "${plan}" && "${plan}" != "null" ]]; then
+        echo "Approving InstallPlan ${plan}"
+        oc patch installplan "${plan}" -n {{ rhoso_nmstate_namespace }} \
+          --type merge -p '{"approved":true}'
+        exit 0
+      fi
+      sleep 10
+    done
+    echo "No pending Manual InstallPlan found (may already be approved)"
+    exit 0
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_prereq_install_plan_approval == "Manual"
+
+- name: NMState Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n {{ rhoso_nmstate_namespace }} \
+        -o jsonpath='{.items[?(@.spec.displayName=="Kubernetes NMState Operator")].status.phase}' 2>/dev/null || true)
+      echo "NMState Operator CSV phase=${phase}"
+      if [[ "${phase}" == "Succeeded" ]]; then
+        exit 0
+      fi
+      sleep 15
+    done
+    oc get csv -n {{ rhoso_nmstate_namespace }} || true
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: NMState Operator — create NMState instance
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: nmstate.io/v1
+    kind: NMState
+    metadata:
+      name: nmstate
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nmstate_cr
+  changed_when: "'created' in rhoso_nmstate_cr.stdout or 'configured' in rhoso_nmstate_cr.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+# ---------------------------------------------------------------------------
+# MetalLB Operator
+# ---------------------------------------------------------------------------
+
+- name: MetalLB Operator — create Namespace
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: {{ rhoso_metallb_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_metallb_ns
+  changed_when: "'created' in rhoso_metallb_ns.stdout or 'configured' in rhoso_metallb_ns.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: MetalLB Operator — create OperatorGroup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      name: metallb-operator
+      namespace: {{ rhoso_metallb_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_metallb_og
+  changed_when: "'created' in rhoso_metallb_og.stdout or 'configured' in rhoso_metallb_og.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: MetalLB Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: metallb-operator
+      namespace: {{ rhoso_metallb_namespace }}
+    spec:
+      name: metallb-operator
+      channel: {{ rhoso_metallb_channel }}
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+      installPlanApproval: {{ rhoso_prereq_install_plan_approval }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_metallb_sub
+  changed_when: "'created' in rhoso_metallb_sub.stdout or 'configured' in rhoso_metallb_sub.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: MetalLB Operator — approve InstallPlan
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for i in $(seq 1 60); do
+      plan=$(oc get installplan -n {{ rhoso_metallb_namespace }} -o json \
+        | jq -r '.items[] | select(.spec.approval=="Manual" and .spec.approved==false) | .metadata.name' \
+        | head -n1)
+      if [[ -n "${plan}" && "${plan}" != "null" ]]; then
+        echo "Approving InstallPlan ${plan}"
+        oc patch installplan "${plan}" -n {{ rhoso_metallb_namespace }} \
+          --type merge -p '{"approved":true}'
+        exit 0
+      fi
+      sleep 10
+    done
+    echo "No pending Manual InstallPlan found (may already be approved)"
+    exit 0
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_prereq_install_plan_approval == "Manual"
+
+- name: MetalLB Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n {{ rhoso_metallb_namespace }} \
+        -o jsonpath='{.items[?(@.spec.displayName=="MetalLB Operator")].status.phase}' 2>/dev/null || true)
+      echo "MetalLB Operator CSV phase=${phase}"
+      if [[ "${phase}" == "Succeeded" ]]; then
+        exit 0
+      fi
+      sleep 15
+    done
+    oc get csv -n {{ rhoso_metallb_namespace }} || true
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: MetalLB Operator — create MetalLB instance
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: metallb.io/v1beta1
+    kind: MetalLB
+    metadata:
+      name: metallb
+      namespace: {{ rhoso_metallb_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_metallb_cr
+  changed_when: "'created' in rhoso_metallb_cr.stdout or 'configured' in rhoso_metallb_cr.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+# ---------------------------------------------------------------------------
+# Cert-Manager Operator
+# ---------------------------------------------------------------------------
+
+- name: Cert-Manager Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: openshift-cert-manager-operator
+      namespace: {{ rhoso_certmanager_namespace }}
+    spec:
+      name: openshift-cert-manager-operator
+      channel: {{ rhoso_certmanager_channel }}
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+      installPlanApproval: {{ rhoso_prereq_install_plan_approval }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_certmgr_sub
+  changed_when: "'created' in rhoso_certmgr_sub.stdout or 'configured' in rhoso_certmgr_sub.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Cert-Manager Operator — approve InstallPlan
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for i in $(seq 1 60); do
+      plan=$(oc get installplan -n {{ rhoso_certmanager_namespace }} -o json \
+        | jq -r '.items[] | select(.spec.approval=="Manual" and .spec.approved==false) | .metadata.name' \
+        | head -n1)
+      if [[ -n "${plan}" && "${plan}" != "null" ]]; then
+        echo "Approving InstallPlan ${plan}"
+        oc patch installplan "${plan}" -n {{ rhoso_certmanager_namespace }} \
+          --type merge -p '{"approved":true}'
+        exit 0
+      fi
+      sleep 10
+    done
+    echo "No pending Manual InstallPlan found (may already be approved)"
+    exit 0
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_prereq_install_plan_approval == "Manual"
+
+- name: Cert-Manager Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n {{ rhoso_certmanager_namespace }} \
+        -o jsonpath='{.items[?(@.spec.displayName=="cert-manager Operator for Red Hat OpenShift")].status.phase}' 2>/dev/null || true)
+      echo "Cert-Manager Operator CSV phase=${phase}"
+      if [[ "${phase}" == "Succeeded" ]]; then
+        exit 0
+      fi
+      sleep 15
+    done
+    oc get csv -n {{ rhoso_certmanager_namespace }} || true
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+# ---------------------------------------------------------------------------
+# HA Operators (conditional — Node Health Check, Self Node Remediation,
+# Fence Agents Remediation)
+# Reference: RHOSO 18.0 Plan PDF — "HA Operators for automated failover"
+# ---------------------------------------------------------------------------
+
+- name: Node Health Check Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: node-healthcheck-operator
+      namespace: openshift-operators
+    spec:
+      name: node-healthcheck-operator
+      channel: stable
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+      installPlanApproval: {{ rhoso_prereq_install_plan_approval }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nhc_sub
+  changed_when: "'created' in rhoso_nhc_sub.stdout or 'configured' in rhoso_nhc_sub.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_node_health_check_enabled | bool
+
+- name: Node Health Check Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n openshift-operators \
+        -o jsonpath='{.items[?(@.metadata.name contains "node-healthcheck")].status.phase}' 2>/dev/null || true)
+      if [[ "${phase}" == *"Succeeded"* ]]; then
+        echo "Node Health Check Operator CSV Succeeded"
+        exit 0
+      fi
+      sleep 15
+    done
+    echo "Timeout waiting for Node Health Check Operator CSV"
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_node_health_check_enabled | bool
+
+- name: Self Node Remediation Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: self-node-remediation
+      namespace: openshift-operators
+    spec:
+      name: self-node-remediation
+      channel: stable
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+      installPlanApproval: {{ rhoso_prereq_install_plan_approval }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_snr_sub
+  changed_when: "'created' in rhoso_snr_sub.stdout or 'configured' in rhoso_snr_sub.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_self_node_remediation_enabled | bool
+
+- name: Self Node Remediation Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n openshift-operators \
+        -o jsonpath='{.items[?(@.metadata.name contains "self-node-remediation")].status.phase}' 2>/dev/null || true)
+      if [[ "${phase}" == *"Succeeded"* ]]; then
+        echo "Self Node Remediation Operator CSV Succeeded"
+        exit 0
+      fi
+      sleep 15
+    done
+    echo "Timeout waiting for Self Node Remediation Operator CSV"
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_self_node_remediation_enabled | bool
+
+- name: Fence Agents Remediation Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: fence-agents-remediation
+      namespace: openshift-operators
+    spec:
+      name: fence-agents-remediation
+      channel: stable
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+      installPlanApproval: {{ rhoso_prereq_install_plan_approval }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_far_sub
+  changed_when: "'created' in rhoso_far_sub.stdout or 'configured' in rhoso_far_sub.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_fence_agents_remediation_enabled | bool
+
+- name: Fence Agents Remediation Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n openshift-operators \
+        -o jsonpath='{.items[?(@.metadata.name contains "fence-agents-remediation")].status.phase}' 2>/dev/null || true)
+      if [[ "${phase}" == *"Succeeded"* ]]; then
+        echo "Fence Agents Remediation Operator CSV Succeeded"
+        exit 0
+      fi
+      sleep 15
+    done
+    echo "Timeout waiting for Fence Agents Remediation Operator CSV"
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_fence_agents_remediation_enabled | bool
+
+# ---------------------------------------------------------------------------
+# Local Storage Operator (conditional — v1.4)
+# Reference: JIO D0.6_LSO/ — openshift-local-storage namespace
+# ---------------------------------------------------------------------------
+
+- name: LSO Operator — create Namespace
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: {{ rhoso_lso_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_lso_ns
+  changed_when: "'created' in rhoso_lso_ns.stdout or 'configured' in rhoso_lso_ns.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_lso_enabled | bool
+
+- name: LSO Operator — create OperatorGroup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      name: local-storage-operator
+      namespace: {{ rhoso_lso_namespace }}
+    spec:
+      targetNamespaces:
+      - {{ rhoso_lso_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_lso_og
+  changed_when: "'created' in rhoso_lso_og.stdout or 'configured' in rhoso_lso_og.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_lso_enabled | bool
+
+- name: LSO Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: local-storage-operator
+      namespace: {{ rhoso_lso_namespace }}
+    spec:
+      name: local-storage-operator
+      channel: {{ rhoso_lso_channel }}
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+      installPlanApproval: {{ rhoso_prereq_install_plan_approval }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_lso_sub
+  changed_when: "'created' in rhoso_lso_sub.stdout or 'configured' in rhoso_lso_sub.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_lso_enabled | bool
+
+- name: LSO Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n {{ rhoso_lso_namespace }} \
+        -o jsonpath='{.items[?(@.metadata.name contains "local-storage-operator")].status.phase}' 2>/dev/null || true)
+      if [[ "${phase}" == *"Succeeded"* ]]; then
+        echo "Local Storage Operator CSV Succeeded"
+        exit 0
+      fi
+      sleep 15
+    done
+    echo "Timeout waiting for Local Storage Operator CSV"
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_lso_enabled | bool
+
+# ---------------------------------------------------------------------------
+# Cluster Observability Operator (conditional — v1.4)
+# Reference: JIO D0.5_ObservabilityOperator/ — openshift-cluster-observability-operator
+# ---------------------------------------------------------------------------
+
+- name: Observability Operator — create Namespace
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: {{ rhoso_observability_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_obs_ns
+  changed_when: "'created' in rhoso_obs_ns.stdout or 'configured' in rhoso_obs_ns.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_observability_enabled | bool
+
+- name: Observability Operator — create OperatorGroup
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      name: cluster-observability-operator
+      namespace: {{ rhoso_observability_namespace }}
+    spec:
+      targetNamespaces:
+      - {{ rhoso_observability_namespace }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_obs_og
+  changed_when: "'created' in rhoso_obs_og.stdout or 'configured' in rhoso_obs_og.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_observability_enabled | bool
+
+- name: Observability Operator — create Subscription
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: cluster-observability-operator
+      namespace: {{ rhoso_observability_namespace }}
+    spec:
+      name: cluster-observability-operator
+      channel: {{ rhoso_observability_channel }}
+      source: {{ rhoso_prereq_operator_source }}
+      sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+      installPlanApproval: {{ rhoso_observability_install_plan_approval }}
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_obs_sub
+  changed_when: "'created' in rhoso_obs_sub.stdout or 'configured' in rhoso_obs_sub.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_observability_enabled | bool
+
+- name: Observability Operator — wait for CSV Succeeded
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+600))
+    while (( SECONDS < end )); do
+      phase=$(oc get csv -n {{ rhoso_observability_namespace }} \
+        -o jsonpath='{.items[?(@.metadata.name contains "cluster-observability-operator")].status.phase}' 2>/dev/null || true)
+      if [[ "${phase}" == *"Succeeded"* ]]; then
+        echo "Cluster Observability Operator CSV Succeeded"
+        exit 0
+      fi
+      sleep 15
+    done
+    echo "Timeout waiting for Cluster Observability Operator CSV"
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_observability_enabled | bool
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+- name: Prerequisite Operators — verify all CRDs present
+  ansible.builtin.include_tasks: common/_verify_required_crds.yml
+  vars:
+    rhoso_crd_check_list: "{{ rhoso_required_crds_prerequisites }}"
+
+- name: Prerequisite Operators — summary
+  ansible.builtin.debug:
+    msg:
+      - "Prerequisite Operator Installation Complete"
+      - "NMState Operator: installed in {{ rhoso_nmstate_namespace }}"
+      - "MetalLB Operator: installed in {{ rhoso_metallb_namespace }}"
+      - "Cert-Manager Operator: installed in {{ rhoso_certmanager_namespace }}"
+      - "Node Health Check Operator: {{ rhoso_node_health_check_enabled | bool | ternary('installed', 'skipped') }}"
+      - "Self Node Remediation Operator: {{ rhoso_self_node_remediation_enabled | bool | ternary('installed', 'skipped') }}"
+      - "Fence Agents Remediation Operator: {{ rhoso_fence_agents_remediation_enabled | bool | ternary('installed', 'skipped') }}"
+      - "LSO Operator: {{ rhoso_lso_enabled | bool | ternary('installed in ' ~ rhoso_lso_namespace, 'skipped') }}"
+      - "Observability Operator: {{ rhoso_observability_enabled | bool | ternary('installed in ' ~ rhoso_observability_namespace, 'skipped') }}"
+      - "All prerequisite CRDs verified."

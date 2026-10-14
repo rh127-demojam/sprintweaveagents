@@ -1,0 +1,15 @@
+---
+# Configure SR-IOV and Multus networking post-install.
+- name: SR-IOV Operator post-configuration
+  ansible.builtin.debug:
+    msg: >-
+      SR-IOV Network Operator installed. Create SriovNetworkNodePolicy and
+      SriovNetwork CRs to configure hardware-accelerated networking interfaces.
+  when: ocp_sriov_operator_enabled | bool
+
+- name: Multus configuration note
+  ansible.builtin.debug:
+    msg: >-
+      Multus CNI is available. Create NetworkAttachmentDefinition CRs for
+      secondary network interfaces on pods.
+  when: ocp_multus_enabled | bool

@@ -1,0 +1,410 @@
+# ---------------------------------------------------------------------------
+# CPAT — Unified AAP 2.5 Export
+# Import all CPAT AAP objects in one shot:
+#   awx-manage import < all-objects.yml
+#
+# This file merges artifacts from TWO agents:
+#   - ODE-5 (OCP Deployment Engineer): EE, credentials, OCP job/workflow templates
+#   - RDE-5 (RHOSO Deployment Engineer): RHOSO job/workflow templates
+#
+# Individual files by owner:
+#   credential-types.yml          — ODE-5 (shared, OCP-specific creds)
+#   ocp-job-templates.yml         — ODE-5
+#   ocp-workflow-templates.yml    — ODE-5
+#   rhoso-job-templates.yml       — RDE-5
+#   rhoso-workflow-templates.yml  — RDE-5
+#
+# Prerequisites (create manually before import):
+#   1. Organization: "Default" (exists by default)
+#   2. Project: "CPAT" — SCM type: Git, pointing to the CPAT repo
+#   3. Inventory: "CPAT Localhost" — host: localhost (ansible_connection: local)
+#   4. Execution Environment: "CPAT EE" — built from aap/execution-environment/
+#   5. Credentials: Create instances of each credential type below
+# ---------------------------------------------------------------------------
+---
+
+# =========================================================================
+# CREDENTIAL TYPES (Owner: ODE-5)
+# =========================================================================
+credential_types:
+
+  - name: "CPAT Bastion SSH"
+    description: "SSH credentials for bastion host delegate_to tasks."
+    kind: cloud
+    inputs:
+      fields:
+        - id: bastion_ssh_user
+          type: string
+          label: "Bastion SSH Username"
+        - id: bastion_ssh_key
+          type: string
+          label: "Bastion SSH Private Key"
+          format: ssh_private_key
+          secret: true
+          multiline: true
+      required: [bastion_ssh_user, bastion_ssh_key]
+    injectors:
+      file:
+        template.bastion_key: "{{ bastion_ssh_key }}"
+      extra_vars:
+        ocp_bastion_ssh_user: "{{ bastion_ssh_user }}"
+        ocp_bastion_ssh_key_path: "{{ tower.filename.bastion_key }}"
+
+  - name: "CPAT BMC Credentials"
+    description: "Redfish BMC API credentials for bare-metal / virtual BMC."
+    kind: cloud
+    inputs:
+      fields:
+        - id: bmc_user
+          type: string
+          label: "BMC Username"
+        - id: bmc_password
+          type: string
+          label: "BMC Password"
+          secret: true
+      required: [bmc_user, bmc_password]
+    injectors:
+      extra_vars:
+        ocp_bmc_user: "{{ bmc_user }}"
+        ocp_bmc_password: "{{ bmc_password }}"
+
+  - name: "CPAT Pull Secret"
+    description: "OpenShift pull secret (JSON). Injected as temp file; never logged."
+    kind: cloud
+    inputs:
+      fields:
+        - id: pull_secret_content
+          type: string
+          label: "Pull Secret (JSON)"
+          secret: true
+          multiline: true
+      required: [pull_secret_content]
+    injectors:
+      file:
+        template.pull_secret: "{{ pull_secret_content }}"
+      extra_vars:
+        ocp_pull_secret_path: "{{ tower.filename.pull_secret }}"
+
+# =========================================================================
+# OCP JOB TEMPLATES (Owner: ODE-5)
+# =========================================================================
+job_templates:
+
+  - name: "CPAT OCP Install"
+    description: "Run any OCP installation task. Survey selects the task (26 choices)."
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/ocp_install.yml"
+    execution_environment: "CPAT EE"
+    credentials: ["CPAT Bastion SSH", "CPAT BMC Credentials", "CPAT Pull Secret"]
+    verbosity: 0
+    timeout: 14400
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP Installation Parameters"
+      description: "Configure the OCP installation task and cluster parameters"
+      spec:
+        - question_name: "OCP Task"
+          variable: "ocp_task"
+          type: "multiplechoice"
+          required: true
+          default: "prerequisites"
+          choices:
+            - "generate_manifests"
+            - "prerequisites"
+            - "bastion_preparation"
+            - "dns_dhcp_validation"
+            - "ntp_sync"
+            - "mirror_registry"
+            - "oc_mirror"
+            - "idms_itms_config"
+            - "install_config"
+            - "agent_config"
+            - "nmstate_configs"
+            - "ignition_configs"
+            - "agent_iso"
+            - "boot_nodes"
+            - "bootstrap"
+            - "wait_install"
+            - "approve_csrs"
+            - "auth_config"
+            - "day2_operators"
+            - "metallb_config"
+            - "sriov_config"
+            - "health_check"
+            - "node_readiness"
+            - "uninstall_mirror_registry"
+            - "destroy_cluster"
+            - "full_install"
+        - question_name: "CIQ File Path"
+          variable: "ocp_ciq_file"
+          type: "text"
+          required: true
+        - question_name: "Cluster Name"
+          variable: "ocp_cluster_name"
+          type: "text"
+          required: true
+        - question_name: "OCP Version"
+          variable: "ocp_version"
+          type: "multiplechoice"
+          required: true
+          default: "4.20"
+          choices: ["4.17", "4.18", "4.19", "4.20", "4.22"]
+        - question_name: "Apply Manifests"
+          variable: "ocp_apply_manifests"
+          type: "multiplechoice"
+          required: true
+          default: "true"
+          choices: ["true", "false"]
+        - question_name: "Skip Generation"
+          variable: "ocp_skip_generation"
+          type: "multiplechoice"
+          required: true
+          default: "false"
+          choices: ["true", "false"]
+        - question_name: "Manifest Directory"
+          variable: "ocp_manifest_dir"
+          type: "text"
+          required: false
+
+  - name: "CPAT OCP Validate"
+    description: "Validate an OCP CIQ workbook (schema + BMC connectivity)."
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/ocp_validate.yml"
+    execution_environment: "CPAT EE"
+    credentials: []
+    verbosity: 0
+    timeout: 600
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP Validation Parameters"
+      description: "Validate an OCP CIQ workbook"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ocp_ciq_file"
+          type: "text"
+          required: true
+        - question_name: "Cluster Name"
+          variable: "ocp_cluster_name"
+          type: "text"
+          required: true
+
+  # =========================================================================
+  # RHOSO JOB TEMPLATES (Owner: RDE-5)
+  # =========================================================================
+
+  - name: "CPAT RHOSO Install"
+    description: "Run any RHOSO installation task. Survey selects the task (19 choices)."
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/main.yml"
+    execution_environment: "CPAT EE"
+    credentials: []
+    job_tags: "rhoso"
+    verbosity: 0
+    timeout: 14400
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "RHOSO Installation Parameters"
+      description: "Configure the RHOSO installation task and cluster parameters"
+      spec:
+        - question_name: "RHOSO Task"
+          variable: "installation_task"
+          type: "multiplechoice"
+          required: true
+          default: "manifests/manifest_generation"
+          choices:
+            - "manifests/manifest_generation"
+            - "prerequisites/prerequisites"
+            - "common/_verify_required_crds"
+            - "prerequisites/prerequisite_operator_installation"
+            - "prerequisites/disconnected_environment_preparation"
+            - "secrets/generate_osp_secret"
+            - "secrets/generate_data_plane_secrets"
+            - "secrets/generate_ceph_secret"
+            - "storage/persistent_storage_configuration"
+            - "storage/trident_storage_configuration"
+            - "storage/_generate_storage_crs"
+            - "control_plane/openstack_operator_installation_and_preparation"
+            - "control_plane/rhocp_preparation_for_rhoso"
+            - "control_plane/control_plane_deployment_and_verification"
+            - "control_plane/control_plane_customization"
+            - "network/network_preparation"
+            - "data_plane/data_plane_deployment_and_verification"
+            - "post_deployment/post_deployment_validation"
+            - "post_deployment/observability_configuration"
+        - question_name: "CIQ File Path"
+          variable: "ciq_file_path"
+          type: "text"
+          required: true
+        - question_name: "Cluster Name"
+          variable: "cluster_name"
+          type: "text"
+          required: true
+        - question_name: "RHOSO Version"
+          variable: "rhoso_version"
+          type: "multiplechoice"
+          required: true
+          default: "18.0"
+          choices: ["18.0"]
+        - question_name: "Apply Manifests"
+          variable: "rhoso_apply_manifests"
+          type: "multiplechoice"
+          required: true
+          default: "true"
+          choices: ["true", "false"]
+        - question_name: "Skip Generation"
+          variable: "rhoso_skip_generation"
+          type: "multiplechoice"
+          required: true
+          default: "false"
+          choices: ["true", "false"]
+        - question_name: "Manifest Directory"
+          variable: "rhoso_manifest_dir"
+          type: "text"
+          required: false
+
+  - name: "CPAT RHOSO Register"
+    description: "Register and validate a RHOSO cluster from CIQ."
+    job_type: run
+    inventory: "CPAT Localhost"
+    project: "CPAT"
+    playbook: "ansible/playbooks/main.yml"
+    execution_environment: "CPAT EE"
+    credentials: []
+    job_tags: "register"
+    verbosity: 0
+    timeout: 600
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "RHOSO Registration Parameters"
+      description: "Register a RHOSO cluster from CIQ"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ciq_file_path"
+          type: "text"
+          required: true
+        - question_name: "Cluster Description"
+          variable: "cluster_description"
+          type: "text"
+          required: false
+        - question_name: "Registration Target"
+          variable: "registration_target"
+          type: "multiplechoice"
+          required: true
+          default: "rhoso"
+          choices: ["rhoso", "ocp"]
+
+# =========================================================================
+# OCP WORKFLOW TEMPLATES (Owner: ODE-5)
+# =========================================================================
+workflow_job_templates:
+
+  - name: "CPAT OCP ABI Full Install"
+    description: "End-to-end OCP ABI installation (connected, 11 steps)"
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP ABI Workflow Parameters"
+      spec:
+        - { question_name: "CIQ File Path", variable: "ocp_ciq_file", type: "text", required: true }
+        - { question_name: "Cluster Name", variable: "ocp_cluster_name", type: "text", required: true }
+        - { question_name: "OCP Version", variable: "ocp_version", type: "multiplechoice", required: true, default: "4.20", choices: ["4.17","4.18","4.19","4.20","4.22"] }
+    workflow_nodes:
+      - { identifier: prerequisites, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "prerequisites", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: install_config }] }
+      - { identifier: install_config, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "install_config", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: agent_config }] }
+      - { identifier: agent_config, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "agent_config", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: nmstate_configs }] }
+      - { identifier: nmstate_configs, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "nmstate_configs", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: agent_iso }] }
+      - { identifier: agent_iso, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "agent_iso", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: boot_nodes }] }
+      - { identifier: boot_nodes, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "boot_nodes", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: bootstrap }] }
+      - { identifier: bootstrap, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "bootstrap", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: wait_install }] }
+      - { identifier: wait_install, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "wait_install", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: approve_csrs }] }
+      - { identifier: approve_csrs, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "approve_csrs", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: health_check }] }
+      - { identifier: health_check, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "health_check", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: node_readiness }] }
+      - { identifier: node_readiness, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "node_readiness", ocp_apply_manifests: true, ocp_skip_generation: false } }
+
+  - name: "CPAT OCP ABI-DC Full Install"
+    description: "End-to-end OCP ABI-DC installation (disconnected, 14 steps)"
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP ABI-DC Workflow Parameters"
+      spec:
+        - { question_name: "CIQ File Path", variable: "ocp_ciq_file", type: "text", required: true }
+        - { question_name: "Cluster Name", variable: "ocp_cluster_name", type: "text", required: true }
+        - { question_name: "OCP Version", variable: "ocp_version", type: "multiplechoice", required: true, default: "4.20", choices: ["4.17","4.18","4.19","4.20","4.22"] }
+    workflow_nodes:
+      - { identifier: prerequisites, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "prerequisites", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: mirror_registry }] }
+      - { identifier: mirror_registry, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "mirror_registry", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: oc_mirror }] }
+      - { identifier: oc_mirror, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "oc_mirror", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: idms_itms_config }] }
+      - { identifier: idms_itms_config, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "idms_itms_config", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: install_config }] }
+      - { identifier: install_config, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "install_config", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: agent_config }] }
+      - { identifier: agent_config, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "agent_config", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: nmstate_configs }] }
+      - { identifier: nmstate_configs, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "nmstate_configs", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: agent_iso }] }
+      - { identifier: agent_iso, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "agent_iso", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: boot_nodes }] }
+      - { identifier: boot_nodes, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "boot_nodes", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: bootstrap }] }
+      - { identifier: bootstrap, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "bootstrap", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: wait_install }] }
+      - { identifier: wait_install, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "wait_install", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: approve_csrs }] }
+      - { identifier: approve_csrs, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "approve_csrs", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: health_check }] }
+      - { identifier: health_check, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "health_check", ocp_apply_manifests: true, ocp_skip_generation: false }, success_nodes: [{ identifier: node_readiness }] }
+      - { identifier: node_readiness, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "node_readiness", ocp_apply_manifests: true, ocp_skip_generation: false } }
+
+  - name: "CPAT OCP Destroy"
+    description: "Destroy an OCP cluster (1 step)"
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP Destroy Parameters"
+      spec:
+        - { question_name: "CIQ File Path", variable: "ocp_ciq_file", type: "text", required: true }
+        - { question_name: "Cluster Name", variable: "ocp_cluster_name", type: "text", required: true }
+        - { question_name: "OCP Version", variable: "ocp_version", type: "multiplechoice", required: true, default: "4.20", choices: ["4.17","4.18","4.19","4.20","4.22"] }
+    workflow_nodes:
+      - { identifier: destroy_cluster, unified_job_template: { name: "CPAT OCP Install", type: job_template }, extra_data: { ocp_task: "destroy_cluster", ocp_apply_manifests: true, ocp_skip_generation: true } }
+
+  # =========================================================================
+  # RHOSO WORKFLOW TEMPLATES (Owner: RDE-5)
+  # =========================================================================
+
+  - name: "CPAT RHOSO Full Install"
+    description: "End-to-end RHOSO installation (19 steps)"
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "RHOSO Full Install Parameters"
+      spec:
+        - { question_name: "CIQ File Path", variable: "ciq_file_path", type: "text", required: true }
+        - { question_name: "Cluster Name", variable: "cluster_name", type: "text", required: true }
+        - { question_name: "RHOSO Version", variable: "rhoso_version", type: "multiplechoice", required: true, default: "18.0", choices: ["18.0"] }
+    workflow_nodes:
+      - { identifier: manifest_generation, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "manifests/manifest_generation", rhoso_apply_manifests: false, rhoso_skip_generation: false }, success_nodes: [{ identifier: prerequisites }] }
+      - { identifier: prerequisites, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "prerequisites/prerequisites", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: verify_crds }] }
+      - { identifier: verify_crds, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "common/_verify_required_crds", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: prereq_operators }] }
+      - { identifier: prereq_operators, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "prerequisites/prerequisite_operator_installation", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: disconnected_prep }] }
+      - { identifier: disconnected_prep, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "prerequisites/disconnected_environment_preparation", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: osp_secret }] }
+      - { identifier: osp_secret, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "secrets/generate_osp_secret", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: dp_secrets }] }
+      - { identifier: dp_secrets, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "secrets/generate_data_plane_secrets", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: ceph_secret }] }
+      - { identifier: ceph_secret, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "secrets/generate_ceph_secret", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: persistent_storage }] }
+      - { identifier: persistent_storage, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "storage/persistent_storage_configuration", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: trident_storage }] }
+      - { identifier: trident_storage, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "storage/trident_storage_configuration", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: storage_crs }] }
+      - { identifier: storage_crs, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "storage/_generate_storage_crs", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: openstack_operator }] }
+      - { identifier: openstack_operator, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "control_plane/openstack_operator_installation_and_preparation", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: rhocp_prep }] }
+      - { identifier: rhocp_prep, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "control_plane/rhocp_preparation_for_rhoso", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: control_plane_deploy }] }
+      - { identifier: control_plane_deploy, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "control_plane/control_plane_deployment_and_verification", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: control_plane_custom }] }
+      - { identifier: control_plane_custom, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "control_plane/control_plane_customization", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: network_prep }] }
+      - { identifier: network_prep, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "network/network_preparation", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: data_plane_deploy }] }
+      - { identifier: data_plane_deploy, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "data_plane/data_plane_deployment_and_verification", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: post_validation }] }
+      - { identifier: post_validation, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "post_deployment/post_deployment_validation", rhoso_apply_manifests: true, rhoso_skip_generation: true }, success_nodes: [{ identifier: observability }] }
+      - { identifier: observability, unified_job_template: { name: "CPAT RHOSO Install", type: job_template }, extra_data: { installation_task: "post_deployment/observability_configuration", rhoso_apply_manifests: true, rhoso_skip_generation: true } }

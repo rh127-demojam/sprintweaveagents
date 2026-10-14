@@ -1,0 +1,194 @@
+---
+# _fetch_bmc_mac.yml — Auto-populate Boot MAC Address via Redfish API
+#
+# For each BMC host with an empty 'Boot MAC Address', queries the Redfish
+# EthernetInterfaces endpoint to discover the first NIC MAC address.
+#
+# Expects:
+#   ocp_bmc_hosts — list of dicts with Hostname, BMC Address, BMC Username, etc.
+#
+# Updates:
+#   ocp_bmc_hosts — same list with Boot MAC Address filled where found
+#
+# BMC Address format: redfish-virtualmedia://<host>:<port>/redfish/v1/Systems/<uuid>
+# Also handles:       redfish://<host>:<port>/redfish/v1/Systems/<uuid>
+
+- name: Identify BMC hosts missing Boot MAC Address
+  ansible.builtin.set_fact:
+    _bmc_mac_missing: >-
+      {{ ocp_bmc_hosts | default([])
+         | selectattr('Boot MAC Address', 'defined')
+         | selectattr('Boot MAC Address', 'equalto', '')
+         | list }}
+    _bmc_mac_present: >-
+      {{ ocp_bmc_hosts | default([])
+         | rejectattr('Boot MAC Address', 'equalto', '')
+         | list }}
+
+- name: Skip Redfish MAC fetch — all hosts have MAC addresses
+  ansible.builtin.debug:
+    msg: "All {{ ocp_bmc_hosts | length }} BMC host(s) already have Boot MAC Address."
+  when: _bmc_mac_missing | length == 0
+
+- name: Fetch Boot MAC Address via Redfish for hosts with empty MAC
+  when: _bmc_mac_missing | length > 0
+  block:
+    - name: "Redfish MAC fetch — querying {{ _bmc_mac_missing | length }} host(s)"
+      ansible.builtin.debug:
+        msg: >-
+          Attempting Redfish MAC auto-discovery for:
+          {{ _bmc_mac_missing | map(attribute='Hostname') | join(', ') }}
+
+    - name: Query Redfish EthernetInterfaces collection for each host
+      ansible.builtin.uri:
+        url: "{{ _redfish_base }}/EthernetInterfaces"
+        method: GET
+        user: "{{ item['BMC Username'] | default('admin') }}"
+        password: "{{ _bmc_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+        timeout: 10
+      vars:
+        _bmc_raw: "{{ item['BMC Address'] | default('') }}"
+        _bmc_stripped: "{{ _bmc_raw | regex_replace('^redfish(-virtualmedia)?://', 'http://') }}"
+        _redfish_base: "{{ _bmc_stripped }}"
+        _pwd_ref: "{{ item['BMC Password Reference'] | default('') }}"
+        _bmc_password: "{{ ocp_bmc_password | default('password') if (_pwd_ref == '' or _pwd_ref is match('\\(vault:.*\\)')) else _pwd_ref }}"
+      register: _redfish_collection_results
+      loop: "{{ _bmc_mac_missing }}"
+      loop_control:
+        label: "{{ item['Hostname'] | default('unknown') }}"
+      failed_when: false
+      no_log: false
+
+    - name: Build list of first EthernetInterface URIs to query
+      ansible.builtin.set_fact:
+        _iface_queries: >-
+          {{
+            _iface_queries | default([]) + [{
+              'hostname': item.item['Hostname'],
+              'bmc_user': item.item['BMC Username'] | default('admin'),
+              'bmc_password': item.item['BMC Password Reference'] | default('password'),
+              'iface_url': (
+                item.json.Members[0]['@odata.id']
+                if (item.status | default(0) == 200
+                    and item.json is defined
+                    and item.json.Members is defined
+                    and item.json.Members | length > 0)
+                else ''
+              ),
+              'bmc_base': (item.item['BMC Address'] | default(''))
+                          | regex_replace('^redfish(-virtualmedia)?://', 'http://')
+                          | regex_replace('/redfish/v1/.*$', ''),
+            }]
+          }}
+      loop: "{{ _redfish_collection_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item['Hostname'] | default('unknown') }}"
+
+    - name: Query individual EthernetInterface for MAC address
+      ansible.builtin.uri:
+        url: "{{ item.bmc_base }}{{ item.iface_url }}"
+        method: GET
+        user: "{{ item.bmc_user }}"
+        password: "{{ item.bmc_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+        timeout: 10
+      register: _redfish_iface_results
+      loop: "{{ _iface_queries | default([]) | selectattr('iface_url', 'ne', '') | list }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+      failed_when: false
+      no_log: false
+      when: _iface_queries | default([]) | length > 0
+
+    - name: Extract MAC addresses from EthernetInterface responses
+      ansible.builtin.set_fact:
+        _fetched_macs: >-
+          {{
+            _fetched_macs | default({}) | combine({
+              item.item.hostname:
+                item.json.MACAddress | default(
+                  item.json.PermanentMACAddress | default('')
+                )
+            })
+          }}
+      loop: "{{ _redfish_iface_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.hostname | default('unknown') }}"
+      when:
+        - _redfish_iface_results is defined
+        - _redfish_iface_results.results is defined
+        - item.status | default(0) == 200
+        - item.json is defined
+
+    - name: Report fetched MAC addresses
+      ansible.builtin.debug:
+        msg: "Redfish MAC: {{ item.key }} → {{ item.value | default('FAILED') }}"
+      loop: "{{ _fetched_macs | default({}) | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: _fetched_macs is defined
+
+    - name: Write merge script
+      ansible.builtin.copy:
+        content: |
+          import json, sys
+          hosts = json.loads(sys.argv[1])
+          macs = json.loads(sys.argv[2])
+          updated = 0
+          for h in hosts:
+              cur = (h.get('Boot MAC Address') or '').strip()
+              got = macs.get(h.get('Hostname', ''), '').strip()
+              sys.stderr.write(f"  {h.get('Hostname','?')}: cur='{cur}' got='{got}'\n")
+              if not cur and got:
+                  h['Boot MAC Address'] = got
+                  updated += 1
+          sys.stderr.write(f"Updated {updated} hosts\n")
+          json.dump(hosts, sys.stdout)
+        dest: /tmp/_merge_macs.py
+        mode: "0644"
+      when: _fetched_macs is defined and _fetched_macs | length > 0
+
+    - name: Run merge script
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /tmp/_merge_macs.py
+          - "{{ ocp_bmc_hosts | to_json }}"
+          - "{{ _fetched_macs | to_json }}"
+      register: _merge_result
+      changed_when: false
+      when: _fetched_macs is defined and _fetched_macs | length > 0
+
+    - name: Debug merge output
+      ansible.builtin.debug:
+        msg:
+          - "rc: {{ _merge_result.rc | default('N/A') }}"
+          - "stderr: {{ _merge_result.stderr | default('N/A') }}"
+          - "stdout length: {{ _merge_result.stdout | default('') | length }}"
+          - "stdout first 200: {{ _merge_result.stdout | default('') | truncate(200) }}"
+      when: _merge_result is defined
+
+    - name: Apply merged BMC hosts
+      ansible.builtin.set_fact:
+        ocp_bmc_hosts: "{{ _merge_result.stdout }}"
+      when: _merge_result is defined and _merge_result.rc | default(1) == 0
+
+    - name: Verify MACs after merge
+      ansible.builtin.debug:
+        msg: "{{ item['Hostname'] }}: Boot MAC = '{{ item['Boot MAC Address'] | default('EMPTY') }}'"
+      loop: "{{ ocp_bmc_hosts }}"
+      loop_control:
+        label: "{{ item['Hostname'] | default('unknown') }}"
+
+  rescue:
+    - name: Redfish MAC fetch failed (non-fatal)
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Redfish MAC auto-discovery failed. This is non-fatal.
+          Fill Boot MAC Address manually in the CIQ.
+          Error: {{ ansible_failed_result.msg | default('unknown') }}

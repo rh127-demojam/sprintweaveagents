@@ -1,0 +1,114 @@
+﻿---
+# Deploying RHOSO 18.0 — Chapter 2: Preparing RHOCP for RHOSO
+# Tasks: node labels (optional), openstack namespace + privileged label, osp-secret
+
+- name: RHOCP preparation — document steps
+  ansible.builtin.debug:
+    msg:
+      - "RHOCP Preparation for RHOSO (Deploying Ch.2)"
+      - "1) Optionally label worker/infra nodes for service placement"
+      - "2) Create project/namespace {{ rhoso_openstack_ns }}"
+      - "3) Label namespace for privileged pod security"
+      - "4) Create Secret {{ rhoso_osp_secret_name }} for service passwords"
+      - "Multi-env on one RHOCP={{ rhoso_multi_env }} (unique namespaces per env)"
+
+- name: RHOCP preparation — create openstack namespace/project
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: {{ rhoso_openstack_ns }}
+      labels:
+        pod-security.kubernetes.io/enforce: privileged
+        security.openshift.io/scc.podSecurityLabelSync: "false"
+        openstack.org/operator-namespace: "{{ rhoso_operators_ns }}"
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_ns_apply
+  changed_when: "'created' in rhoso_ns_apply.stdout or 'configured' in rhoso_ns_apply.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: RHOCP preparation — verify privileged namespace labels
+  ansible.builtin.command:
+    cmd: >-
+      oc get namespace {{ rhoso_openstack_ns }}
+      -o jsonpath={.metadata.labels}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_ns_labels
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: RHOCP preparation — assert privileged label present
+  ansible.builtin.assert:
+    that:
+      - "'privileged' in (rhoso_ns_labels.stdout | default(''))"
+    fail_msg: >-
+      Namespace '{{ rhoso_openstack_ns }}' must allow privileged pods
+      (pod-security.kubernetes.io/enforce=privileged).
+  when: rhoso_can_apply | bool
+
+- name: RHOCP preparation — generate osp-secret with service passwords
+  ansible.builtin.shell: |
+    set -euo pipefail
+    gen() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 | base64 -w0; }
+    # HeatAuthEncryptionKey must be 32-char key (docs Ch.2.3)
+    heat_key=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 | base64 -w0)
+    oc apply -f - <<EOF
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: {{ rhoso_osp_secret_name }}
+      namespace: {{ rhoso_openstack_ns }}
+    type: Opaque
+    data:
+      AdminPassword: $(gen)
+      AodhPassword: $(gen)
+      BarbicanPassword: $(gen)
+      BarbicanSimpleCryptoKEK: $(gen)
+      CeilometerPassword: $(gen)
+      CinderPassword: $(gen)
+      DatabasePassword: $(gen)
+      DbRootPassword: $(gen)
+      DesignatePassword: $(gen)
+      GlancePassword: $(gen)
+      HeatAuthEncryptionKey: ${heat_key}
+      HeatPassword: $(gen)
+      IronicPassword: $(gen)
+      KeystonePassword: $(gen)
+      ManilaPassword: $(gen)
+      MetadataSecret: $(gen)
+      NeutronPassword: $(gen)
+      NovaPassword: $(gen)
+      OctaviaPassword: $(gen)
+      PlacementPassword: $(gen)
+      SwiftPassword: $(gen)
+    EOF
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_secret_apply
+  changed_when: "'created' in rhoso_secret_apply.stdout or 'configured' in rhoso_secret_apply.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: RHOCP preparation — verify osp-secret
+  ansible.builtin.command:
+    cmd: oc get secret {{ rhoso_osp_secret_name }} -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: RHOCP preparation — multi-environment reminder
+  ansible.builtin.debug:
+    msg: >-
+      Multi Environment on Single RHOCP is enabled. Ensure each RHOSO environment
+      uses a unique OpenStack Namespace, MetalLB pools, and NetConfig ranges
+      (Deploying multiple RHOSO environments on a single RHOCP cluster).
+  when: rhoso_multi_env in ['yes', 'true', '1']

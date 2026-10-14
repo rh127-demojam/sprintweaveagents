@@ -1,0 +1,58 @@
+---
+interfaces:
+{% for iface in host_nmstate_interfaces %}
+- name: {{ iface['Interface Name'] }}
+  type: {{ iface.Type | lower }}
+  state: {{ iface.State | lower }}
+{% if iface['IPv4 Address'] | default('') | length > 0 %}
+  ipv4:
+    enabled: true
+    dhcp: false
+    address:
+    - ip: {{ iface['IPv4 Address'] }}
+      prefix-length: {{ iface['Prefix Length'] | default('24') }}
+{% else %}
+  ipv4:
+    enabled: false
+{% endif %}
+{% if iface['IPv6 Address'] | default('') | length > 0 %}
+  ipv6:
+    enabled: true
+    dhcp: false
+    address:
+    - ip: {{ iface['IPv6 Address'] }}
+      prefix-length: {{ iface['IPv6 Prefix'] | default('64') }}
+{% endif %}
+{% if iface.Type | lower == 'bond' and iface['Bond Mode'] | default('') | length > 0 %}
+  link-aggregation:
+    mode: {{ iface['Bond Mode'] }}
+    port:
+{% for member in iface['Bond Members'].split(',') %}
+    - {{ member | trim }}
+{% endfor %}
+{% endif %}
+{% if iface.Type | lower == 'vlan' and iface['VLAN ID'] | default('') | length > 0 %}
+  vlan:
+    base-iface: {{ iface['Bond Members'] | default(iface['Interface Name'].split('.')[0]) }}
+    id: {{ iface['VLAN ID'] }}
+{% endif %}
+{% if iface.MTU | default('') | length > 0 %}
+  mtu: {{ iface.MTU }}
+{% endif %}
+{% endfor %}
+{% if host_nmstate_interfaces[0]['DNS Servers'] | default('') | length > 0 %}
+dns-resolver:
+  config:
+    server:
+{% for dns in host_nmstate_interfaces[0]['DNS Servers'].split(',') %}
+    - {{ dns | trim }}
+{% endfor %}
+{% endif %}
+{% if host_nmstate_interfaces[0]['Gateway'] | default('') | length > 0 %}
+routes:
+  config:
+  - destination: 0.0.0.0/0
+    next-hop-address: {{ host_nmstate_interfaces[0]['Gateway'] }}
+    next-hop-interface: {{ host_nmstate_interfaces[0]['Interface Name'] }}
+    table-id: 254
+{% endif %}

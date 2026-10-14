@@ -1,0 +1,208 @@
+# ---------------------------------------------------------------------------
+# CPAT OCP Workflow Templates for AAP 2.5
+# Owner: OCP Deployment Engineer (ODE-5)
+# Import: awx-manage import < ocp-workflow-templates.yml
+# ---------------------------------------------------------------------------
+---
+workflow_job_templates:
+
+  # =========================================================================
+  # 1. OCP ABI Full Install (Connected)
+  # =========================================================================
+  - name: "CPAT OCP ABI Full Install"
+    description: >-
+      End-to-end OCP ABI installation (connected): prerequisites ->
+      install_config -> agent_config -> nmstate_configs -> agent_iso ->
+      boot_nodes -> bootstrap -> wait_install -> approve_csrs ->
+      health_check -> node_readiness
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP ABI Workflow Parameters"
+      description: "Cluster parameters for all workflow nodes"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ocp_ciq_file"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Name"
+          variable: "ocp_cluster_name"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "OCP Version"
+          variable: "ocp_version"
+          type: "multiplechoice"
+          required: true
+          default: "4.20"
+          choices: ["4.17", "4.18", "4.19", "4.20", "4.22"]
+    workflow_nodes:
+      - identifier: prerequisites
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "prerequisites", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: install_config }]
+      - identifier: install_config
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "install_config", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: agent_config }]
+      - identifier: agent_config
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "agent_config", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: nmstate_configs }]
+      - identifier: nmstate_configs
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "nmstate_configs", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: agent_iso }]
+      - identifier: agent_iso
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "agent_iso", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: boot_nodes }]
+      - identifier: boot_nodes
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "boot_nodes", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: bootstrap }]
+      - identifier: bootstrap
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "bootstrap", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: wait_install }]
+      - identifier: wait_install
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "wait_install", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: approve_csrs }]
+      - identifier: approve_csrs
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "approve_csrs", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: health_check }]
+      - identifier: health_check
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "health_check", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: node_readiness }]
+      - identifier: node_readiness
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "node_readiness", ocp_apply_manifests: true, ocp_skip_generation: false }
+
+  # =========================================================================
+  # 2. OCP ABI-DC Full Install (Disconnected)
+  # =========================================================================
+  - name: "CPAT OCP ABI-DC Full Install"
+    description: >-
+      End-to-end OCP ABI-DC installation (disconnected): prerequisites ->
+      mirror_registry -> oc_mirror -> idms_itms_config -> install_config ->
+      agent_config -> nmstate_configs -> agent_iso -> boot_nodes ->
+      bootstrap -> wait_install -> approve_csrs -> health_check -> node_readiness
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP ABI-DC Workflow Parameters"
+      description: "Cluster parameters for all workflow nodes"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ocp_ciq_file"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Name"
+          variable: "ocp_cluster_name"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "OCP Version"
+          variable: "ocp_version"
+          type: "multiplechoice"
+          required: true
+          default: "4.20"
+          choices: ["4.17", "4.18", "4.19", "4.20", "4.22"]
+    workflow_nodes:
+      - identifier: prerequisites
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "prerequisites", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: mirror_registry }]
+      - identifier: mirror_registry
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "mirror_registry", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: oc_mirror }]
+      - identifier: oc_mirror
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "oc_mirror", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: idms_itms_config }]
+      - identifier: idms_itms_config
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "idms_itms_config", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: install_config }]
+      - identifier: install_config
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "install_config", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: agent_config }]
+      - identifier: agent_config
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "agent_config", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: nmstate_configs }]
+      - identifier: nmstate_configs
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "nmstate_configs", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: agent_iso }]
+      - identifier: agent_iso
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "agent_iso", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: boot_nodes }]
+      - identifier: boot_nodes
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "boot_nodes", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: bootstrap }]
+      - identifier: bootstrap
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "bootstrap", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: wait_install }]
+      - identifier: wait_install
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "wait_install", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: approve_csrs }]
+      - identifier: approve_csrs
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "approve_csrs", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: health_check }]
+      - identifier: health_check
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "health_check", ocp_apply_manifests: true, ocp_skip_generation: false }
+        success_nodes: [{ identifier: node_readiness }]
+      - identifier: node_readiness
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "node_readiness", ocp_apply_manifests: true, ocp_skip_generation: false }
+
+  # =========================================================================
+  # 3. OCP Destroy Cluster
+  # =========================================================================
+  - name: "CPAT OCP Destroy"
+    description: >-
+      Destroy an OCP cluster: eject media, power off nodes, stop HAProxy,
+      remove VIPs, clean artifacts.
+    organization: "Default"
+    ask_variables_on_launch: true
+    survey_enabled: true
+    survey_spec:
+      name: "OCP Destroy Parameters"
+      description: "Cluster to destroy"
+      spec:
+        - question_name: "CIQ File Path"
+          variable: "ocp_ciq_file"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "Cluster Name"
+          variable: "ocp_cluster_name"
+          type: "text"
+          required: true
+          default: ""
+        - question_name: "OCP Version"
+          variable: "ocp_version"
+          type: "multiplechoice"
+          required: true
+          default: "4.20"
+          choices: ["4.17", "4.18", "4.19", "4.20", "4.22"]
+    workflow_nodes:
+      - identifier: destroy_cluster
+        unified_job_template: { name: "CPAT OCP Install", type: job_template }
+        extra_data: { ocp_task: "destroy_cluster", ocp_apply_manifests: true, ocp_skip_generation: true }

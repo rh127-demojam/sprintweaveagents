@@ -1,0 +1,63 @@
+---
+# Verify required CLI tools and files are available.
+- name: Check openshift-install binary
+  ansible.builtin.command:
+    cmd: "{{ ocp_openshift_install_binary }} version"
+  register: ocp_installer_version
+  changed_when: false
+  failed_when: ocp_installer_version.rc != 0
+  delegate_to: localhost
+
+- name: Display openshift-install version
+  ansible.builtin.debug:
+    msg: "{{ ocp_installer_version.stdout_lines }}"
+
+- name: Check oc CLI binary
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} version --client"
+  register: ocp_oc_version
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Check nmstatectl availability (for agent-based installs)
+  ansible.builtin.command:
+    cmd: nmstatectl version
+  register: ocp_nmstatectl_check
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: ocp_is_abi | bool
+
+- name: Warn if nmstatectl is not installed
+  ansible.builtin.debug:
+    msg: "WARNING: nmstatectl not found. Install with: sudo dnf install /usr/bin/nmstatectl -y"
+  when:
+    - ocp_is_abi | bool
+    - ocp_nmstatectl_check.rc | default(1) != 0
+
+- name: Verify pull secret file exists
+  ansible.builtin.stat:
+    path: "{{ ocp_pull_secret_path }}"
+  register: ocp_pull_secret_stat
+  delegate_to: localhost
+
+- name: Assert pull secret exists
+  ansible.builtin.assert:
+    that: ocp_pull_secret_stat.stat.exists | default(false)
+    fail_msg: "Pull secret not found at {{ ocp_pull_secret_path }}"
+
+- name: Verify SSH public key file exists
+  ansible.builtin.stat:
+    path: "{{ ocp_ssh_public_key_path }}"
+  register: ocp_ssh_key_stat
+  delegate_to: localhost
+
+- name: Assert SSH public key exists
+  ansible.builtin.assert:
+    that: ocp_ssh_key_stat.stat.exists | default(false)
+    fail_msg: "SSH public key not found at {{ ocp_ssh_public_key_path }}"
+
+- name: Prerequisites verified
+  ansible.builtin.debug:
+    msg: "All OCP installation prerequisites verified successfully."

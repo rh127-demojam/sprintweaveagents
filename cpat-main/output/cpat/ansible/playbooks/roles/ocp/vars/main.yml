@@ -1,0 +1,12 @@
+---
+# OCP Role internal variables — not intended for CIQ override
+ocp_install_config_file: "{{ ocp_install_dir }}/install-config.yaml"
+ocp_agent_config_file: "{{ ocp_install_dir }}/agent-config.yaml"
+ocp_agent_iso_file: "{{ ocp_install_dir }}/agent.x86_64.iso"
+ocp_kubeadmin_password_file: "{{ ocp_install_dir }}/auth/kubeadmin-password"
+ocp_generated_kubeconfig: "{{ ocp_install_dir }}/auth/kubeconfig"
+ocp_is_disconnected: "{{ ocp_deployment_mode | lower == 'disconnected' }}"
+ocp_is_abi: "{{ ocp_install_method | upper in ['ABI', 'ABI-DC'] }}"
+ocp_is_ipi: "{{ ocp_install_method | upper == 'IPI-BM' }}"
+ocp_is_upi: "{{ ocp_install_method | upper == 'UPI-BM' }}"
+ocp_is_sno: "{{ ocp_install_method | upper == 'SNO' }}"

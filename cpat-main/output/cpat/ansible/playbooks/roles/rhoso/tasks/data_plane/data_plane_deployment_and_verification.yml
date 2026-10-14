@@ -1,0 +1,348 @@
+﻿---
+# Deploying RHOSO 18.0 — Chapter 5: Creating the data plane
+# Required CRs: Secrets, (BareMetalHost), OpenStackDataPlaneNodeSet, OpenStackDataPlaneDeployment
+
+- name: Data plane — document procedure steps
+  ansible.builtin.debug:
+    msg:
+      - "RHOSO Data Plane Deployment and Verification"
+      - "Reference: Deploying RHOSO 18.0 Chapter 5 (5.3 secrets, 5.4/5.5 NodeSet, 5.7 Deployment)"
+      - "Required CRDs: OpenStackDataPlaneNodeSet, OpenStackDataPlaneDeployment, OpenStackDataPlaneService"
+      - "Provisioning mode from CIQ: {{ rhoso_dp_mode }}"
+      - "NodeSet: {{ rhoso_nodeset_name }} | Deployment: {{ rhoso_deployment_name }}"
+      - "CIQ data plane nodes: {{ rhoso_nodes | map(attribute='Node Name') | list }}"
+
+- name: Data plane — verify required CRDs
+  ansible.builtin.include_tasks: common/_verify_required_crds.yml
+  vars:
+    rhoso_crd_check_list: >-
+      {{
+        rhoso_required_crds_data_plane
+        + (rhoso_required_crds_unprovisioned if rhoso_dp_mode == 'unprovisioned' else [])
+      }}
+
+- name: Data plane — generate NodeSet / Deployment / BMH CRs from CIQ
+  ansible.builtin.include_tasks: data_plane/_generate_data_plane_crs.yml
+  when: not (rhoso_skip_generation | bool)
+
+- name: Data plane — require reviewed data-plane manifests when skipping generation
+  ansible.builtin.stat:
+    path: "{{ rhoso_manifest_dir }}/{{ item }}"
+  register: rhoso_dp_manifest_stats
+  loop: >-
+    {{
+      ['openstack_dataplane_nodeset.yaml', 'openstack_dataplane_deployment.yaml']
+      + (['openstack_baremetalhosts.yaml'] if rhoso_dp_mode == 'unprovisioned' else [])
+    }}
+  delegate_to: localhost
+  when: rhoso_skip_generation | bool
+
+- name: Data plane — assert reviewed data-plane manifests exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      Reviewed manifest missing: {{ item.item }} under {{ rhoso_manifest_dir }}.
+      Run "Generate Manifests for Review", inspect artifacts in the UI, then re-run this task.
+  loop: "{{ rhoso_dp_manifest_stats.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('n/a') }}"
+  when: rhoso_skip_generation | bool
+
+- name: Data plane prerequisites — require SSH key path for Ansible
+  ansible.builtin.assert:
+    that:
+      - rhoso_dp_ssh_key | length > 0
+    fail_msg: >-
+      Set 'Data Plane SSH Private Key Path' in rhoso_details
+      (used for Secret {{ rhoso_ansible_ssh_secret_name }}).
+
+- name: Data plane prerequisites — SSH private key must exist on automation host
+  ansible.builtin.stat:
+    path: "{{ rhoso_dp_ssh_key }}"
+  register: rhoso_dp_key_stat
+  delegate_to: localhost
+
+- name: Data plane prerequisites — assert SSH key file present
+  ansible.builtin.assert:
+    that:
+      - rhoso_dp_key_stat.stat.exists
+    fail_msg: "Data plane SSH private key not found at '{{ rhoso_dp_ssh_key }}'."
+
+- name: Data plane prerequisites — subscription inputs for activation_key
+  ansible.builtin.assert:
+    that:
+      - rhoso_rh_org | length > 0
+      - rhoso_rh_activation_key | length > 0
+    fail_msg: >-
+      For Subscription Method=activation_key set 'Red Hat Organization ID'
+      and 'Red Hat Activation Key' in rhoso_details.
+  when: rhoso_sub_method == 'activation_key'
+
+- name: Data plane prerequisites — verify control plane is Ready
+  ansible.builtin.command:
+    cmd: >-
+      oc get openstackcontrolplane {{ rhoso_control_plane_name }}
+      -n {{ rhoso_openstack_ns }}
+      -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_cp_ready
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane prerequisites — assert control plane Ready
+  ansible.builtin.assert:
+    that:
+      - rhoso_cp_ready.stdout | default('') == 'True'
+    fail_msg: >-
+      Control plane '{{ rhoso_control_plane_name }}' is not Ready.
+      Complete 'Control Plane Deployment and Verification' first.
+  when: rhoso_can_apply | bool
+
+# --- 5.3 Creating the data plane secrets ---
+- name: Data plane secrets — create Ansible SSH Secret
+  ansible.builtin.shell: |
+    set -euo pipefail
+    PUB="{{ rhoso_dp_ssh_key }}.pub"
+    EXTRA=()
+    if [[ -f "${PUB}" ]]; then
+      EXTRA+=(--from-file=ssh-publickey="${PUB}")
+      EXTRA+=(--from-file=authorized_keys="${PUB}")
+    fi
+    oc create secret generic {{ rhoso_ansible_ssh_secret_name }} \
+      --save-config --dry-run=client \
+      --from-file=ssh-privatekey={{ rhoso_dp_ssh_key }} \
+      "${EXTRA[@]}" \
+      -n {{ rhoso_openstack_ns }} -o yaml | oc apply -f -
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_ansible_secret
+  changed_when: "'created' in rhoso_ansible_secret.stdout or 'configured' in rhoso_ansible_secret.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane secrets — ensure nova migration key pair exists
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -f {{ rhoso_manifest_dir }}/nova-migration -N "" -t rsa -b 4096
+  args:
+    creates: "{{ rhoso_manifest_dir }}/nova-migration"
+  delegate_to: localhost
+
+- name: Data plane secrets — create nova migration SSH Secret
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc create secret generic {{ rhoso_nova_migration_secret_name }} \
+      --save-config --dry-run=client \
+      --from-file=ssh-privatekey={{ rhoso_manifest_dir }}/nova-migration \
+      --from-file=ssh-publickey={{ rhoso_manifest_dir }}/nova-migration.pub \
+      -n {{ rhoso_openstack_ns }} -o yaml | oc apply -f -
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nova_mig_secret
+  changed_when: "'created' in rhoso_nova_mig_secret.stdout or 'configured' in rhoso_nova_mig_secret.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane secrets — create subscription-manager Secret (activation key)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    oc create secret generic {{ rhoso_subscription_secret_name }} \
+      --save-config --dry-run=client \
+      --from-literal=username={{ rhoso_rh_org }} \
+      --from-literal=password={{ rhoso_rh_activation_key }} \
+      -n {{ rhoso_openstack_ns }} -o yaml | oc apply -f -
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_sub_secret
+  changed_when: "'created' in rhoso_sub_secret.stdout or 'configured' in rhoso_sub_secret.stdout"
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_sub_method == 'activation_key'
+
+- name: Data plane secrets — create libvirt Secret placeholder
+  ansible.builtin.shell: |
+    set -euo pipefail
+    # Libvirt TLS/password material — replace with site-specific certs for production
+    oc create secret generic {{ rhoso_libvirt_secret_name }} \
+      --save-config --dry-run=client \
+      --from-literal=LibvirtPassword=$(openssl rand -hex 16) \
+      -n {{ rhoso_openstack_ns }} -o yaml | oc apply -f -
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_libvirt_secret
+  changed_when: "'created' in rhoso_libvirt_secret.stdout or 'configured' in rhoso_libvirt_secret.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane secrets — verify required Secrets exist
+  ansible.builtin.command:
+    cmd: oc get secret {{ item }} -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  loop:
+    - "{{ rhoso_ansible_ssh_secret_name }}"
+    - "{{ rhoso_nova_migration_secret_name }}"
+    - "{{ rhoso_subscription_secret_name }}"
+    - "{{ rhoso_libvirt_secret_name }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+# --- 5.4 / 5.5 OpenStackDataPlaneNodeSet ---
+- name: Data plane NodeSet — assert provisioning mode is valid
+  ansible.builtin.assert:
+    that:
+      - rhoso_dp_mode in ['pre-provisioned', 'unprovisioned']
+    fail_msg: >-
+      Data Plane Provisioning Mode must be 'pre-provisioned' or 'unprovisioned'
+      (cannot mix both in one OpenStackDataPlaneNodeSet).
+
+- name: Data plane NodeSet — require at least one node in CIQ for pre-provisioned
+  ansible.builtin.assert:
+    that:
+      - rhoso_nodes | length > 0
+    fail_msg: >-
+      Add rows to rhoso_data_plane_nodes (Node Name, Ansible Host, Role, Management IP).
+  when: rhoso_dp_mode == 'pre-provisioned'
+
+- name: Data plane NodeSet — apply BareMetalHost CRs when unprovisioned
+  ansible.builtin.command:
+    cmd: oc apply -f {{ rhoso_manifest_dir }}/openstack_baremetalhosts.yaml
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_bmh_apply
+  changed_when: "'created' in rhoso_bmh_apply.stdout or 'configured' in rhoso_bmh_apply.stdout"
+  failed_when: false
+  delegate_to: localhost
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_dp_mode == 'unprovisioned'
+
+- name: Data plane NodeSet — apply OpenStackDataPlaneNodeSet CR
+  ansible.builtin.command:
+    cmd: >-
+      oc apply -f {{ rhoso_manifest_dir }}/openstack_dataplane_nodeset.yaml
+      -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nodeset_apply
+  changed_when: "'created' in rhoso_nodeset_apply.stdout or 'configured' in rhoso_nodeset_apply.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane NodeSet — wait for SetupReady
+  ansible.builtin.command:
+    cmd: >-
+      oc wait openstackdataplanenodeset {{ rhoso_nodeset_name }}
+      -n {{ rhoso_openstack_ns }}
+      --for=condition=SetupReady
+      --timeout={{ rhoso_wait_timeout }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nodeset_setup
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane NodeSet — verify related Secrets and services
+  ansible.builtin.shell: |
+    set -euo pipefail
+    echo "=== data-plane secrets ==="
+    oc get secret -n {{ rhoso_openstack_ns }} | grep -E 'openstack-data-plane|dataplane|libvirt|subscription|nova-migration' || true
+    echo "=== OpenStackDataPlaneService ==="
+    oc get openstackdataplaneservice -n {{ rhoso_openstack_ns }} || true
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nodeset_verify
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+# --- 5.7 Deploying the data plane (OpenStackDataPlaneDeployment) ---
+- name: Data plane Deployment — remove failed prior Deployment CRs if present
+  ansible.builtin.shell: |
+    set -euo pipefail
+    # Docs: remove failed OpenStackDataPlaneDeployment before creating a new one
+    failed=$(oc get openstackdataplanedeployment -n {{ rhoso_openstack_ns }} \
+      -o jsonpath='{range .items[?(@.status.conditions[?(@.type=="Ready")].status=="False")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+    for name in ${failed}; do
+      echo "Deleting failed deployment CR: ${name}"
+      oc delete openstackdataplanedeployment "${name}" -n {{ rhoso_openstack_ns }} --ignore-not-found
+    done
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane Deployment — apply OpenStackDataPlaneDeployment CR
+  ansible.builtin.command:
+    cmd: >-
+      oc apply -f {{ rhoso_manifest_dir }}/openstack_dataplane_deployment.yaml
+      -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_deploy_apply
+  changed_when: "'created' in rhoso_deploy_apply.stdout or 'configured' in rhoso_deploy_apply.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane Deployment — wait for Deployment Ready
+  ansible.builtin.command:
+    cmd: >-
+      oc wait openstackdataplanedeployment {{ rhoso_deployment_name }}
+      -n {{ rhoso_openstack_ns }}
+      --for=condition=Ready
+      --timeout={{ rhoso_wait_timeout }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_deploy_wait
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane Deployment — wait for NodeSet Ready
+  ansible.builtin.command:
+    cmd: >-
+      oc wait openstackdataplanenodeset {{ rhoso_nodeset_name }}
+      -n {{ rhoso_openstack_ns }}
+      --for=condition=Ready
+      --timeout={{ rhoso_wait_timeout }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nodeset_ready
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane Deployment — show AnsibleEE jobs and status
+  ansible.builtin.shell: |
+    set -euo pipefail
+    echo "=== OpenStackDataPlaneDeployment ==="
+    oc get openstackdataplanedeployment -n {{ rhoso_openstack_ns }}
+    echo "=== OpenStackDataPlaneNodeSet ==="
+    oc get openstackdataplanenodeset -n {{ rhoso_openstack_ns }}
+    echo "=== AnsibleEE pods ==="
+    oc get pods -n {{ rhoso_openstack_ns }} -l app=openstackansibleee || true
+    echo "=== Jobs for deployment ==="
+    oc get job -n {{ rhoso_openstack_ns }} -l openstackdataplanedeployment={{ rhoso_deployment_name }} || true
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_dp_status
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Data plane — verification summary
+  ansible.builtin.debug:
+    msg:
+      - "Data plane deployment complete checklist"
+      - "Secrets: Ansible SSH, nova migration, subscription, libvirt"
+      - "NodeSet '{{ rhoso_nodeset_name }}' mode={{ rhoso_dp_mode }}"
+      - "Deployment '{{ rhoso_deployment_name }}'"
+      - "Manifests: {{ rhoso_manifest_dir }}/openstack_dataplane_*.yaml"
+      - "{{ rhoso_dp_status.stdout_lines | default(['(apply disabled — manifests only)']) }}"

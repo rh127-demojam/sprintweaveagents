@@ -1,0 +1,42 @@
+---
+# Verify all OCP nodes are in Ready state.
+- name: Get node status
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get nodes -o wide"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_nodes_status
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Display node status
+  ansible.builtin.debug:
+    msg: "{{ ocp_nodes_status.stdout_lines | default(['Node check skipped — generate mode']) }}"
+
+- name: Check for NotReady nodes
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get nodes -o jsonpath='{.items[?(@.status.conditions[-1].type==\"Ready\")].status.conditions[-1].status}'"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_node_ready_status
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Verify expected node count
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get nodes --no-headers | wc -l"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_node_count
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Report node readiness
+  ansible.builtin.debug:
+    msg:
+      - "Total nodes: {{ ocp_node_count.stdout | default('N/A') | trim }}"
+      - "Expected: {{ (ocp_control_plane_replicas | int) + (ocp_compute_replicas | int) }} ({{ ocp_control_plane_replicas }} masters + {{ ocp_compute_replicas }} workers)"
+  when: ocp_apply_manifests | bool

@@ -1,0 +1,30 @@
+{#
+  Nova CPU-pinning ConfigMap for EDPM data plane nodes.
+  Optional — generated when EDPM CPU Dedicated Set is configured in CIQ.
+
+  This ConfigMap is mounted into nova-compute containers via extraMounts on the
+  OpenStackDataPlaneNodeSet, providing cpu_dedicated_set, reserved_host_memory_mb,
+  and initial_cpu_allocation_ratio to nova.conf.
+
+  CIQ inputs used:
+    - rhoso_edpm_cpu_dedicated_set
+    - rhoso_edpm_reserved_host_memory_mb
+    - rhoso_edpm_initial_cpu_allocation_ratio
+#}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-cpu-pinning
+  namespace: {{ rhoso_openstack_ns }}
+data:
+  25-cpu-pinning-nova.conf: |
+    [DEFAULT]
+{% if (rhoso_edpm_initial_cpu_allocation_ratio | default('') | string) | length > 0 %}
+    initial_cpu_allocation_ratio={{ rhoso_edpm_initial_cpu_allocation_ratio }}
+{% endif %}
+{% if (rhoso_edpm_reserved_host_memory_mb | default('') | string) | length > 0 %}
+    reserved_host_memory_mb = {{ rhoso_edpm_reserved_host_memory_mb }}
+{% endif %}
+    [compute]
+    cpu_dedicated_set = {{ rhoso_edpm_cpu_dedicated_set }}

@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# CPAT Execution Environment for AAP 2.5
+# Build: ansible-builder build -t cpat-ee:latest -f execution-environment.yml
+# ---------------------------------------------------------------------------
+---
+version: 3
+
+build_arg_defaults:
+  ANSIBLE_GALAXY_CLI_COLLECTION_OPTS: "--pre"
+
+images:
+  base_image:
+    name: "registry.redhat.io/ansible-automation-platform-25/ee-minimal-rhel9:latest"
+
+dependencies:
+  galaxy: requirements.yml
+  python: requirements.txt
+  system: bindep.txt
+
+additional_build_files:
+  # OCP binaries — place openshift-install, oc, kubectl (or tarballs) here
+  - src: ../../binaries
+    dest: ocp-bin
+
+additional_build_steps:
+  prepend_final:
+    # Install OCP binaries into the EE image
+    - RUN set -e ; \
+        if [ -f /output/ocp-bin/openshift-install ]; then \
+          echo "=== Using pre-placed extracted binaries ===" ; \
+          for f in openshift-install oc kubectl; do \
+            [ -f "/output/ocp-bin/$f" ] && install -m 0755 "/output/ocp-bin/$f" /usr/local/bin/ ; \
+          done ; \
+        elif [ -f /output/ocp-bin/openshift-install-linux.tar.gz ]; then \
+          echo "=== Extracting tarballs ===" ; \
+          tar xzf /output/ocp-bin/openshift-client-linux.tar.gz -C /usr/local/bin/ oc kubectl 2>/dev/null || true ; \
+          tar xzf /output/ocp-bin/openshift-install-linux.tar.gz -C /usr/local/bin/ openshift-install ; \
+          chmod +x /usr/local/bin/openshift-install /usr/local/bin/oc /usr/local/bin/kubectl ; \
+        else \
+          echo "WARNING: No OCP binaries found in binaries/ — download manually or add them before build" ; \
+        fi
+    # Preserve mirror artifacts for bastion deployment
+    - RUN mkdir -p /opt/cpat/mirror-artifacts ; \
+        for f in mirror-registry-amd64.tar.gz oc-mirror-rhel9-linux-amd64.tar.gz; do \
+          [ -f "/output/ocp-bin/$f" ] && cp "/output/ocp-bin/$f" /opt/cpat/mirror-artifacts/ ; \
+        done ; true

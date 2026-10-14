@@ -1,0 +1,79 @@
+---
+# OCP CIQ Validation Playbook — Runs schema-based validation during registration.
+#
+# Called by the CPAT backend during OCP cluster registration.
+# Receives parsed CIQ data as extra_vars (JSON) and validates every field
+# against the OCP CIQ schema (types + regexp patterns).
+#
+# Usage:
+#   ansible-playbook ocp_validate.yml \
+#     -e '{"ocp_cluster_name": "ocp", "ocp_ciq": {...}, "ocp_bmc_hosts": [...], ...}'
+
+- name: OCP CIQ Registration & Validation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Convert raw extra vars to facts (allows set_fact override)
+      ansible.builtin.set_fact:
+        ocp_bmc_hosts: "{{ _raw_ocp_bmc_hosts | default(ocp_bmc_hosts | default([])) }}"
+        ocp_nmstate_interfaces: "{{ _raw_ocp_nmstate_interfaces | default(ocp_nmstate_interfaces | default([])) }}"
+        ocp_compute_nodes: "{{ _raw_ocp_compute_nodes | default(ocp_compute_nodes | default([])) }}"
+        ocp_dns_records: "{{ _raw_ocp_dns_records | default(ocp_dns_records | default([])) }}"
+
+    - name: OCP registration — display cluster info
+      ansible.builtin.debug:
+        msg:
+          - "CPAT OCP Registration & Validation"
+          - "Cluster Name: {{ ocp_cluster_name }}"
+          - "Install Method: {{ ocp_install_method | default('unknown') }}"
+          - "Deployment Mode: {{ ocp_deployment_mode | default('unknown') }}"
+          - "OCP Version: {{ ocp_ciq['OCP Version'] | default('unknown') }}"
+          - "Parameters: {{ ocp_ciq | length }}"
+          - "BMC hosts: {{ ocp_bmc_hosts | default([]) | length }}"
+          - "NMState interfaces: {{ ocp_nmstate_interfaces | default([]) | length }}"
+          - "Compute nodes: {{ ocp_compute_nodes | default([]) | length }}"
+          - "DNS records: {{ ocp_dns_records | default([]) | length }}"
+
+    - name: Derive OCP installation mode flags
+      ansible.builtin.set_fact:
+        ocp_is_disconnected: "{{ ocp_deployment_mode | default('connected') in ['disconnected', 'airgapped', 'offline'] }}"
+        ocp_is_abi: "{{ ocp_install_method | default('ABI') in ['ABI', 'ABI-DC'] }}"
+        ocp_is_ipi: "{{ ocp_install_method | default('') == 'IPI-BM' }}"
+        ocp_is_upi: "{{ ocp_install_method | default('') == 'UPI-BM' }}"
+        ocp_is_sno: "{{ ocp_install_method | default('') == 'SNO' }}"
+
+    - name: Display derived flags
+      ansible.builtin.debug:
+        msg:
+          - "Disconnected: {{ ocp_is_disconnected }}"
+          - "ABI: {{ ocp_is_abi }}"
+          - "IPI: {{ ocp_is_ipi }}"
+          - "UPI: {{ ocp_is_upi }}"
+          - "SNO: {{ ocp_is_sno }}"
+
+    - name: Auto-fetch Boot MAC Address via Redfish (best-effort)
+      ansible.builtin.include_tasks: roles/ocp/tasks/common/_fetch_bmc_mac.yml
+
+    - name: Run OCP CIQ schema-based validation
+      ansible.builtin.include_tasks: roles/ocp/tasks/common/_validate_ciq.yml
+
+    - name: Write enriched row tables back to file for backend persistence
+      ansible.builtin.copy:
+        content: "{{ _enriched | to_nice_json }}"
+        dest: /tmp/cpat_enriched_ciq.json
+        mode: "0644"
+      vars:
+        _enriched:
+          ocp_bmc_hosts: "{{ ocp_bmc_hosts | default([]) }}"
+          ocp_nmstate_interfaces: "{{ ocp_nmstate_interfaces | default([]) }}"
+          ocp_compute_nodes: "{{ ocp_compute_nodes | default([]) }}"
+          ocp_dns_records: "{{ ocp_dns_records | default([]) }}"
+
+    - name: OCP CIQ validation and registration complete
+      ansible.builtin.debug:
+        msg:
+          - "OCP cluster '{{ ocp_cluster_name }}' CIQ validation passed."
+          - "All parameters, BMC hosts, NMState interfaces, and DNS records validated."
+          - "Cluster is ready for deployment tasks."

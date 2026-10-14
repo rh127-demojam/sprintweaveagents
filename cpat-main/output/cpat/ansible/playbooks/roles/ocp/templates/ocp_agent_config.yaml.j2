@@ -1,0 +1,75 @@
+apiVersion: v1beta1
+kind: AgentConfig
+metadata:
+  name: {{ ocp_cluster_name }}
+rendezvousIP: {{ ocp_rendezvous_ip }}
+{% if ocp_additional_ntp_sources | default('') | length > 0 %}
+additionalNTPSources:
+{% for ntp in ocp_additional_ntp_sources.split(',') %}
+- {{ ntp | trim }}
+{% endfor %}
+{% endif %}
+{% if ocp_boot_artifacts_base_url | default('') | length > 0 %}
+bootArtifactsBaseURL: {{ ocp_boot_artifacts_base_url }}
+{% endif %}
+{% if ocp_bmc_hosts | default([]) | length > 0 %}
+hosts:
+{% for host in ocp_bmc_hosts %}
+- hostname: {{ host.Hostname }}
+  role: {{ host.Role }}
+  interfaces:
+  - name: {{ (ocp_nmstate_interfaces | selectattr('Hostname', 'equalto', host.Hostname) | map(attribute='Interface Name') | first) | default('eno1') }}
+    macAddress: {{ host['Boot MAC Address'] | default('') }}
+{% if host['Root Device Hint'] | default('') | length > 0 %}
+  rootDeviceHints:
+    deviceName: {{ host['Root Device Hint'] | regex_replace('^deviceName:\\s*', '') }}
+{% endif %}
+{% set host_ifaces = ocp_nmstate_interfaces | selectattr('Hostname', 'equalto', host.Hostname) | list %}
+{% if host_ifaces | length > 0 %}
+  networkConfig:
+    interfaces:
+{% for iface in host_ifaces %}
+    - name: {{ iface['Interface Name'] }}
+      type: {{ iface.Type | lower }}
+      state: {{ iface.State | lower }}
+{% if iface['IPv4 Address'] | default('') | length > 0 %}
+      ipv4:
+        enabled: true
+        address:
+        - ip: {{ iface['IPv4 Address'] }}
+          prefix-length: {{ iface['Prefix Length'] | default('24') }}
+        dhcp: false
+{% endif %}
+{% if iface.Type | lower == 'bond' and iface['Bond Mode'] | default('') | length > 0 %}
+      link-aggregation:
+        mode: {{ iface['Bond Mode'] }}
+        port:
+{% for member in iface['Bond Members'].split(',') %}
+        - {{ member | trim }}
+{% endfor %}
+{% endif %}
+{% if iface.Type | lower == 'vlan' and iface['VLAN ID'] | default('') | length > 0 %}
+      vlan:
+        base-iface: {{ iface['Bond Members'] | default(iface['Interface Name'].split('.')[0]) }}
+        id: {{ iface['VLAN ID'] }}
+{% endif %}
+{% endfor %}
+{% if host_ifaces[0]['DNS Servers'] | default('') | length > 0 %}
+    dns-resolver:
+      config:
+        server:
+{% for dns in host_ifaces[0]['DNS Servers'].split(',') %}
+        - {{ dns | trim }}
+{% endfor %}
+{% endif %}
+{% if host_ifaces[0]['Gateway'] | default('') | length > 0 %}
+    routes:
+      config:
+      - destination: 0.0.0.0/0
+        next-hop-address: {{ host_ifaces[0]['Gateway'] }}
+        next-hop-interface: {{ host_ifaces[0]['Interface Name'] }}
+        table-id: 254
+{% endif %}
+{% endif %}
+{% endfor %}
+{% endif %}

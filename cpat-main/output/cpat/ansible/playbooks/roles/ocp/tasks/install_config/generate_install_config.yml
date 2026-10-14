@@ -1,0 +1,90 @@
+---
+# Generate install-config.yaml from CIQ parameters.
+# Templates locally for review, then copies to bastion for openshift-install.
+
+- name: Clean previous install artifacts on bastion (re-install safe)
+  ansible.builtin.shell:
+    cmd: |
+      cd {{ ocp_install_dir }} 2>/dev/null || exit 0
+      rm -f install-config.yaml agent-config.yaml .openshift_install.log .openshift_install_state.json
+      rm -f agent.x86_64.iso agent.aarch64.iso
+      rm -rf auth/ bootstrap.ign master.ign worker.ign metadata.json
+      echo "Cleaned previous install artifacts from {{ ocp_install_dir }}"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  changed_when: false
+  failed_when: false
+
+- name: Read pull secret content
+  ansible.builtin.slurp:
+    src: "{{ ocp_pull_secret_path }}"
+  register: ocp_pull_secret_content
+  delegate_to: localhost
+  no_log: true
+
+- name: Read SSH public key content
+  ansible.builtin.slurp:
+    src: "{{ ocp_ssh_public_key_path }}"
+  register: ocp_ssh_key_content
+  delegate_to: localhost
+
+- name: Read additional trust bundle (disconnected)
+  ansible.builtin.slurp:
+    src: "{{ ocp_additional_trust_bundle_path }}"
+  register: ocp_trust_bundle_content
+  delegate_to: localhost
+  when: ocp_additional_trust_bundle_path | default('') | length > 0
+  no_log: true
+
+- name: Set decoded secrets
+  ansible.builtin.set_fact:
+    ocp_pull_secret_decoded: "{{ ocp_pull_secret_content.content | b64decode | trim }}"
+    ocp_ssh_key_decoded: "{{ ocp_ssh_key_content.content | b64decode | trim }}"
+    ocp_trust_bundle_decoded: >-
+      {{ (ocp_trust_bundle_content.content | default('') | b64decode | trim)
+         if (ocp_trust_bundle_content is defined and ocp_trust_bundle_content.content is defined)
+         else '' }}
+  no_log: true
+
+- name: Generate install-config.yaml (local artifact)
+  ansible.builtin.template:
+    src: "{{ 'ocp_sno_install_config.yaml.j2' if (ocp_is_sno | bool) else 'ocp_install_config.yaml.j2' }}"
+    dest: "{{ ocp_manifest_dir }}/install-config.yaml"
+    mode: "0600"
+  delegate_to: localhost
+
+- name: Copy install-config.yaml to bastion
+  ansible.builtin.copy:
+    src: "{{ ocp_manifest_dir }}/install-config.yaml"
+    dest: "{{ ocp_install_dir }}/install-config.yaml"
+    mode: "0600"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Copy pull-secret.json to bastion
+  ansible.builtin.copy:
+    src: "{{ ocp_pull_secret_path }}"
+    dest: "{{ ocp_install_dir }}/pull-secret.json"
+    mode: "0600"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  no_log: true
+
+- name: install-config.yaml generated
+  ansible.builtin.debug:
+    msg:
+      - "install-config.yaml generated and copied to bastion"
+      - "Bastion path: {{ ocp_install_dir }}/install-config.yaml"
+      - "CPAT artifact: {{ ocp_manifest_dir }}/install-config.yaml"

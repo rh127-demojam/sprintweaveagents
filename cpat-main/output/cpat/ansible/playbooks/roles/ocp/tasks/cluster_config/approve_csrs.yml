@@ -1,0 +1,27 @@
+---
+# Auto-approve pending Certificate Signing Requests after bootstrap.
+- name: Get pending CSRs
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} get csr -o jsonpath='{.items[?(@.status=={})].metadata.name}'"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  register: ocp_pending_csrs
+  changed_when: false
+  delegate_to: localhost
+  when: ocp_apply_manifests | bool
+
+- name: Approve all pending CSRs
+  ansible.builtin.command:
+    cmd: "{{ ocp_oc_binary }} adm certificate approve {{ item }}"
+  environment:
+    KUBECONFIG: "{{ ocp_install_dir }}/auth/kubeconfig"
+  loop: "{{ ocp_pending_csrs.stdout.split() | default([]) }}"
+  delegate_to: localhost
+  when:
+    - ocp_apply_manifests | bool
+    - ocp_pending_csrs.stdout | default('') | length > 0
+
+- name: Report CSR approval
+  ansible.builtin.debug:
+    msg: "Approved {{ ocp_pending_csrs.stdout.split() | default([]) | length }} pending CSRs."
+  when: ocp_apply_manifests | bool

@@ -1,0 +1,202 @@
+﻿---
+# Deploying RHOSO in a disconnected environment
+# Creates ImageDigestMirrorSet, ImageTagMirrorSet, CatalogSource, optional OperatorHub disable,
+# and merges mirror pull-secret / CA into the cluster.
+
+- name: Disconnected prep — connected mode notice
+  ansible.builtin.debug:
+    msg: >-
+      Deployment Mode='{{ rhoso_deployment_mode }}' is connected.
+      Disconnected Environment Preparation is not required.
+  when: not (rhoso_is_disconnected | bool)
+
+- name: Disconnected environment preparation
+  when: rhoso_is_disconnected | bool
+  block:
+    - name: Disconnected prep — document procedure
+      ansible.builtin.debug:
+        msg:
+          - "Disconnected Environment Preparation"
+          - "Reference: Deploying RHOSO in a disconnected environment"
+          - "1) Validate mirror registry + catalog index + pull secret CIQ inputs"
+          - "2) Install mirror CA (if provided) and merge pull secret"
+          - "3) Apply ImageDigestMirrorSet + ImageTagMirrorSet"
+          - "4) Optionally disable default OperatorHub CatalogSources"
+          - "5) Create mirrored CatalogSource for OpenStack Operator"
+          - "6) Wait for CatalogSource READY"
+          - "Mirror={{ rhoso_mirror_registry }} CatalogSource={{ rhoso_catsrc_name }}"
+
+    - name: Disconnected prep — validate required CIQ fields
+      ansible.builtin.assert:
+        that:
+          - rhoso_mirror_registry | length > 0
+          - rhoso_pull_secret | length > 0
+          - rhoso_catsrc_image | length > 0
+          - rhoso_catsrc_name | length > 0
+          - rhoso_operator_source | length > 0
+        fail_msg: >-
+          Disconnected mode requires: Mirror Registry URL, Pull Secret Path,
+          CatalogSource Image, CatalogSource Name, and Operator Source
+          (usually the mirrored CatalogSource name).
+
+    - name: Disconnected prep — pull secret file must exist
+      ansible.builtin.stat:
+        path: "{{ rhoso_mirror_pull_secret }}"
+      register: rhoso_mirror_pull_stat
+      delegate_to: localhost
+
+    - name: Disconnected prep — assert mirror pull secret present
+      ansible.builtin.assert:
+        that:
+          - rhoso_mirror_pull_stat.stat.exists
+        fail_msg: >-
+          Mirror Pull Secret Path '{{ rhoso_mirror_pull_secret }}' not found.
+          Set 'Mirror Pull Secret Path' (or Pull Secret Path) in rhoso_details.
+
+    - name: Disconnected prep — generate mirror / catalog manifests from CIQ
+      ansible.builtin.include_tasks: manifests/_generate_disconnected_crs.yml
+      when: not (rhoso_skip_generation | bool)
+
+    - name: Disconnected prep — require reviewed manifests when skipping generation
+      ansible.builtin.stat:
+        path: "{{ rhoso_manifest_dir }}/{{ item }}"
+      register: rhoso_disc_manifest_stats
+      loop:
+        - image_digest_mirror_set.yaml
+        - image_tag_mirror_set.yaml
+        - catalog_source.yaml
+      delegate_to: localhost
+      when: rhoso_skip_generation | bool
+
+    - name: Disconnected prep — assert reviewed disconnected manifests exist
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          Reviewed manifest missing: {{ item.item }} under {{ rhoso_manifest_dir }}.
+          Run "Generate Manifests for Review" first, then review/download in the UI.
+      loop: "{{ rhoso_disc_manifest_stats.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('n/a') }}"
+      when: rhoso_skip_generation | bool
+
+    - name: Disconnected prep — create ConfigMap for mirror registry CA
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc -n openshift-config create configmap rhoso-mirror-ca \
+          --from-file=ca-bundle.crt={{ rhoso_mirror_ca_path }} \
+          --dry-run=client -o yaml | oc apply -f -
+        oc patch image.config.openshift.io/cluster --type=merge \
+          -p '{"spec":{"additionalTrustedCA":{"name":"rhoso-mirror-ca"}}}'
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_mirror_ca
+      changed_when: true
+      delegate_to: localhost
+      when:
+        - rhoso_can_apply | bool
+        - rhoso_mirror_ca_path | length > 0
+
+    - name: Disconnected prep — update cluster pull-secret with mirror credentials
+      ansible.builtin.shell: |
+        set -euo pipefail
+        tmpdir=$(mktemp -d)
+        trap 'rm -rf "${tmpdir}"' EXIT
+        oc get secret pull-secret -n openshift-config \
+          -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d > "${tmpdir}/cluster.json"
+        cp "{{ rhoso_mirror_pull_secret }}" "${tmpdir}/mirror.json"
+        python3 - "${tmpdir}" <<'PY'
+        import json, pathlib, sys
+        td = pathlib.Path(sys.argv[1])
+        cluster = json.loads((td / "cluster.json").read_text())
+        mirror = json.loads((td / "mirror.json").read_text())
+        mirror_auths = mirror.get("auths", mirror)
+        cluster.setdefault("auths", {}).update(mirror_auths)
+        (td / "merged.json").write_text(json.dumps(cluster))
+        PY
+        oc set data secret/pull-secret -n openshift-config \
+          --from-file=.dockerconfigjson="${tmpdir}/merged.json"
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_pull_merge
+      changed_when: true
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Disconnected prep — apply ImageDigestMirrorSet
+      ansible.builtin.command:
+        cmd: oc apply -f {{ rhoso_manifest_dir }}/image_digest_mirror_set.yaml
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_idms_apply
+      changed_when: "'created' in rhoso_idms_apply.stdout or 'configured' in rhoso_idms_apply.stdout"
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Disconnected prep — apply ImageTagMirrorSet
+      ansible.builtin.command:
+        cmd: oc apply -f {{ rhoso_manifest_dir }}/image_tag_mirror_set.yaml
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_itms_apply
+      changed_when: "'created' in rhoso_itms_apply.stdout or 'configured' in rhoso_itms_apply.stdout"
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Disconnected prep — disable default OperatorHub sources
+      ansible.builtin.command:
+        cmd: oc apply -f {{ rhoso_manifest_dir }}/operatorhub_disable_defaults.yaml
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_ohub_apply
+      changed_when: "'created' in rhoso_ohub_apply.stdout or 'configured' in rhoso_ohub_apply.stdout"
+      delegate_to: localhost
+      when:
+        - rhoso_can_apply | bool
+        - rhoso_disable_default_catsrc in ['yes', 'true', '1']
+
+    - name: Disconnected prep — apply mirrored CatalogSource
+      ansible.builtin.command:
+        cmd: oc apply -f {{ rhoso_manifest_dir }}/catalog_source.yaml
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_catsrc_apply
+      changed_when: "'created' in rhoso_catsrc_apply.stdout or 'configured' in rhoso_catsrc_apply.stdout"
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Disconnected prep — wait for CatalogSource READY
+      ansible.builtin.shell: |
+        set -euo pipefail
+        end=$((SECONDS+600))
+        while (( SECONDS < end )); do
+          state=$(oc get catalogsource {{ rhoso_catsrc_name }} -n {{ rhoso_catsrc_namespace }} \
+            -o jsonpath='{.status.connectionState.lastObservedState}' 2>/dev/null || true)
+          echo "CatalogSource state=${state}"
+          if [[ "${state}" == "READY" ]]; then
+            exit 0
+          fi
+          sleep 15
+        done
+        oc get catalogsource {{ rhoso_catsrc_name }} -n {{ rhoso_catsrc_namespace }} -o yaml || true
+        exit 1
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      changed_when: false
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Disconnected prep — show MachineConfigPool status after mirrors
+      ansible.builtin.command:
+        cmd: oc get mcp
+      environment: "{{ rhoso_oc_env }}"
+      changed_when: false
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Disconnected prep — summary
+      ansible.builtin.debug:
+        msg:
+          - "Disconnected prep complete (or manifests generated)."
+          - "Next: OpenStack Operator Installation using source={{ rhoso_operator_source }}"
+          - "Data plane registry override={{ rhoso_effective_dp_registry }}"
+          - "Manifests: {{ rhoso_manifest_dir }}"

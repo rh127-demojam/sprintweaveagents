@@ -1,0 +1,93 @@
+apiVersion: v1
+baseDomain: {{ ocp_base_domain }}
+compute:
+- architecture: {{ ocp_architecture }}
+  hyperthreading: {{ ocp_hyperthreading | default('Enabled') }}
+  name: worker
+  replicas: {{ ocp_compute_replicas }}
+controlPlane:
+  architecture: {{ ocp_architecture }}
+  hyperthreading: {{ ocp_hyperthreading | default('Enabled') }}
+  name: master
+  replicas: {{ ocp_control_plane_replicas }}
+metadata:
+  name: {{ ocp_cluster_name }}
+networking:
+  clusterNetwork:
+  - cidr: {{ ocp_cluster_network_cidr }}
+    hostPrefix: {{ ocp_cluster_network_host_prefix }}
+{% if ocp_cluster_network_cidr_v6 | default('') | length > 0 %}
+  - cidr: {{ ocp_cluster_network_cidr_v6 }}
+    hostPrefix: 64
+{% endif %}
+  machineNetwork:
+  - cidr: {{ ocp_machine_network_cidr }}
+{% if ocp_machine_network_cidr_v6 | default('') | length > 0 %}
+  - cidr: {{ ocp_machine_network_cidr_v6 }}
+{% endif %}
+  networkType: {{ ocp_network_type }}
+  serviceNetwork:
+  - {{ ocp_service_network_cidr }}
+{% if ocp_service_network_cidr_v6 | default('') | length > 0 %}
+  - {{ ocp_service_network_cidr_v6 }}
+{% endif %}
+{% if ocp_is_ipi | bool %}
+platform:
+  baremetal:
+    apiVIPs:
+    - {{ ocp_api_vip }}
+    ingressVIPs:
+    - {{ ocp_ingress_vip }}
+    provisioningNetwork: {{ ocp_provisioning_network | default('Disabled') }}
+{% if ocp_provisioning_network_cidr | default('') | length > 0 %}
+    provisioningNetworkCIDR: {{ ocp_provisioning_network_cidr }}
+{% endif %}
+    hosts:
+{% for host in ocp_bmc_hosts | default([]) %}
+    - name: {{ host.Hostname }}
+      role: {{ host.Role }}
+      bmc:
+        address: {{ host['BMC Address'] }}
+        username: {{ host['BMC Username'] }}
+        password: {{ host['BMC Password Reference'] }}
+{% if host['Disable Certificate Verification'] | default('no') | lower in ['yes', 'true'] %}
+        disableCertificateVerification: true
+{% endif %}
+      bootMACAddress: {{ host['Boot MAC Address'] }}
+{% if host['Root Device Name'] | default('') | length > 0 %}
+      rootDeviceHints:
+        deviceName: {{ host['Root Device Name'] }}
+{% endif %}
+{% endfor %}
+{% else %}
+platform:
+  none: {}
+{% endif %}
+{% if ocp_fips_mode | bool %}
+fips: true
+{% endif %}
+{% if ocp_publish | default('External') != 'External' %}
+publish: {{ ocp_publish }}
+{% endif %}
+{% if ocp_cpu_partitioning | default('None') != 'None' %}
+cpuPartitioningMode: {{ ocp_cpu_partitioning }}
+{% endif %}
+pullSecret: '{{ ocp_pull_secret_decoded | to_json }}'
+sshKey: '{{ ocp_ssh_key_decoded }}'
+{% if ocp_is_disconnected | bool and ocp_trust_bundle_decoded | default('') | length > 0 %}
+additionalTrustBundle: |
+{{ ocp_trust_bundle_decoded | indent(2, true) }}
+{% endif %}
+{% if ocp_is_disconnected | bool and (ocp_image_content_source_1 | default('') | length > 0 or ocp_image_content_source_2 | default('') | length > 0) %}
+imageContentSources:
+{% if ocp_image_content_source_1 | default('') | length > 0 %}
+- mirrors:
+  - {{ ocp_image_content_mirror_1 }}
+  source: {{ ocp_image_content_source_1 }}
+{% endif %}
+{% if ocp_image_content_source_2 | default('') | length > 0 %}
+- mirrors:
+  - {{ ocp_image_content_mirror_2 }}
+  source: {{ ocp_image_content_source_2 }}
+{% endif %}
+{% endif %}

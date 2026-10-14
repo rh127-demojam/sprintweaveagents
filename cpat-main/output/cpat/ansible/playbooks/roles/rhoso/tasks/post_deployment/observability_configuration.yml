@@ -1,0 +1,122 @@
+---
+# Configure Cluster Observability Operator MonitoringStack after operator installation.
+# Reference: JIO D0.5_ObservabilityOperator/ — MonitoringStack CR for cluster metrics
+# Conditional: runs only when Observability Enabled = yes in CIQ
+
+- name: Observability — skip when not enabled
+  ansible.builtin.debug:
+    msg: "Cluster Observability Operator is not enabled — skipping configuration."
+  when: not (rhoso_observability_enabled | bool)
+
+- name: Observability configuration
+  when: rhoso_observability_enabled | bool
+  block:
+    - name: Observability — document procedure
+      ansible.builtin.debug:
+        msg:
+          - "Observability Configuration (Cluster Observability Operator)"
+          - "Namespace: {{ rhoso_observability_namespace }}"
+          - "MonitoringStack enabled: {{ rhoso_monitoring_stack_enabled | bool }}"
+          - "MonitoringStack name: {{ rhoso_monitoring_stack_name }}"
+
+    - name: Observability — verify operator CSV Succeeded
+      ansible.builtin.shell: |
+        set -euo pipefail
+        end=$((SECONDS+300))
+        while (( SECONDS < end )); do
+          phase=$(oc get csv -n {{ rhoso_observability_namespace }} \
+            -o jsonpath='{.items[?(@.metadata.name contains "cluster-observability-operator")].status.phase}' 2>/dev/null || true)
+          if [[ "${phase}" == *"Succeeded"* ]]; then
+            echo "Cluster Observability Operator CSV Succeeded"
+            exit 0
+          fi
+          sleep 15
+        done
+        echo "Timeout waiting for Cluster Observability Operator CSV"
+        exit 1
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      changed_when: false
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Observability — create MonitoringStack CR
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc apply -f - <<EOF
+        apiVersion: monitoring.rhobs/v1alpha1
+        kind: MonitoringStack
+        metadata:
+          name: {{ rhoso_monitoring_stack_name }}
+          namespace: {{ rhoso_observability_namespace }}
+        spec:
+          logLevel: info
+          retention: 7d
+          resourceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: rhoso
+          prometheusConfig:
+            replicas: 2
+            remoteWrite: []
+          alertmanagerConfig:
+            disabled: false
+        EOF
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_monitoring_stack
+      changed_when: "'created' in rhoso_monitoring_stack.stdout or 'configured' in rhoso_monitoring_stack.stdout"
+      delegate_to: localhost
+      when:
+        - rhoso_can_apply | bool
+        - rhoso_monitoring_stack_enabled | bool
+
+    - name: Observability — wait for MonitoringStack Ready
+      ansible.builtin.shell: |
+        set -euo pipefail
+        end=$((SECONDS+600))
+        while (( SECONDS < end )); do
+          ready=$(oc get monitoringstack {{ rhoso_monitoring_stack_name }} \
+            -n {{ rhoso_observability_namespace }} \
+            -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)
+          echo "MonitoringStack Available=${ready}"
+          if [[ "${ready}" == "True" ]]; then
+            exit 0
+          fi
+          sleep 15
+        done
+        echo "Timeout waiting for MonitoringStack Available"
+        oc get monitoringstack -n {{ rhoso_observability_namespace }} || true
+        exit 1
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      changed_when: false
+      delegate_to: localhost
+      when:
+        - rhoso_can_apply | bool
+        - rhoso_monitoring_stack_enabled | bool
+
+    - name: Observability — list monitoring resources
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "=== MonitoringStack ==="
+        oc get monitoringstack -n {{ rhoso_observability_namespace }} || true
+        echo "=== Prometheus pods ==="
+        oc get pods -n {{ rhoso_observability_namespace }} -l app.kubernetes.io/name=prometheus || true
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_obs_status
+      changed_when: false
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Observability — summary
+      ansible.builtin.debug:
+        msg:
+          - "Observability configuration complete"
+          - "Operator namespace: {{ rhoso_observability_namespace }}"
+          - "MonitoringStack: {{ rhoso_monitoring_stack_enabled | bool | ternary(rhoso_monitoring_stack_name, 'skipped') }}"
+          - "{{ rhoso_obs_status.stdout_lines | default(['(apply disabled)']) }}"

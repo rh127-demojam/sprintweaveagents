@@ -1,0 +1,80 @@
+# SprintWeave Domain Glossary - Platform Engineering
+# Use with team-config.yaml: domain: platform
+
+domain: platform
+
+terms:
+  # Platform Engineering
+  IDP: Internal Developer Platform
+  Developer Portal: Self-service UI for platform capabilities
+  Golden Path: Recommended approach for common development tasks
+  Platform Team: Team providing infrastructure and tooling to product teams
+  Backstage: Open-source developer portal framework
+  Service Catalog: Registry of available platform services
+
+  # Infrastructure
+  Bare Metal: Physical servers without virtualization
+  Hypervisor: Software creating and managing virtual machines
+  VM: Virtual Machine
+  vCPU: Virtual CPU
+  NUMA: Non-Uniform Memory Access
+  SR-IOV: Single Root I/O Virtualization
+  DPDK: Data Plane Development Kit
+  OVS: Open vSwitch
+  OVN: Open Virtual Network
+
+  # Storage
+  Ceph: Distributed storage platform
+  NFS: Network File System
+  iSCSI: Internet Small Computer Systems Interface
+  LVM: Logical Volume Manager
+  PV: Persistent Volume (Kubernetes)
+  PVC: Persistent Volume Claim
+  StorageClass: Kubernetes storage provisioner definition
+  CSI: Container Storage Interface
+
+  # Networking
+  BGP: Border Gateway Protocol
+  OSPF: Open Shortest Path First
+  VLAN: Virtual Local Area Network
+  VXLAN: Virtual Extensible LAN
+  SDN: Software-Defined Networking
+  NFV: Network Functions Virtualization
+  CNI: Container Network Interface
+  Calico: Kubernetes networking and security
+  OVN-Kubernetes: OVN-based networking for Kubernetes
+  MetalLB: Bare-metal load balancer for Kubernetes
+  Ingress: Kubernetes external access management
+
+  # Automation & Configuration
+  Ansible: Agentless automation framework
+  Puppet: Configuration management tool
+  Chef: Infrastructure automation platform
+  Salt: Event-driven automation
+  AWX: Open-source Ansible Tower
+  AAP: Ansible Automation Platform
+  Playbook: Ansible automation definition file
+  Role: Reusable Ansible automation unit
+  Inventory: Ansible target host definitions
+
+  # Linux & OS
+  RHEL: Red Hat Enterprise Linux
+  CoreOS: Immutable container-optimized OS
+  Kickstart: Automated RHEL installation
+  systemd: Linux system and service manager
+  SELinux: Security-Enhanced Linux
+  cgroups: Linux control groups for resource limiting
+  namespaces: Linux kernel isolation feature
+  eBPF: Extended Berkeley Packet Filter
+
+  # Hardware & Data Center
+  BMC: Baseboard Management Controller
+  IPMI: Intelligent Platform Management Interface
+  Redfish: Modern server management API
+  iLO: Integrated Lights-Out (HP)
+  iDRAC: Integrated Dell Remote Access Controller
+  RAID: Redundant Array of Independent Disks
+  NIC: Network Interface Card
+  ToR: Top-of-Rack switch
+  PDU: Power Distribution Unit
+  UPS: Uninterruptible Power Supply

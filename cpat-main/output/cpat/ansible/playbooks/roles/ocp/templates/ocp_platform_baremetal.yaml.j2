@@ -1,0 +1,39 @@
+platform:
+  baremetal:
+    apiVIPs:
+    - {{ ocp_api_vip }}
+{% if ocp_api_vip_v6 | default('') | length > 0 %}
+    - {{ ocp_api_vip_v6 }}
+{% endif %}
+    ingressVIPs:
+    - {{ ocp_ingress_vip }}
+{% if ocp_ingress_vip_v6 | default('') | length > 0 %}
+    - {{ ocp_ingress_vip_v6 }}
+{% endif %}
+    provisioningNetwork: {{ ocp_provisioning_network | default('Disabled') }}
+{% if ocp_provisioning_network_cidr | default('') | length > 0 %}
+    provisioningNetworkCIDR: {{ ocp_provisioning_network_cidr }}
+{% endif %}
+{% if ocp_provisioning_bridge | default('') | length > 0 %}
+    provisioningBridge: {{ ocp_provisioning_bridge }}
+{% endif %}
+{% if ocp_external_bridge | default('') | length > 0 %}
+    externalBridge: {{ ocp_external_bridge }}
+{% endif %}
+    hosts:
+{% for host in ocp_bmc_hosts | default([]) %}
+    - name: {{ host.Hostname }}
+      role: {{ host.Role }}
+      bmc:
+        address: {{ host['BMC Address'] }}
+        username: {{ host['BMC Username'] }}
+        password: {{ host['BMC Password Reference'] }}
+{% if host['Disable Certificate Verification'] | default('no') | lower in ['yes', 'true'] %}
+        disableCertificateVerification: true
+{% endif %}
+      bootMACAddress: {{ host['Boot MAC Address'] }}
+{% if host['Root Device Name'] | default('') | length > 0 %}
+      rootDeviceHints:
+        deviceName: {{ host['Root Device Name'] }}
+{% endif %}
+{% endfor %}

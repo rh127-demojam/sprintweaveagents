@@ -1,0 +1,103 @@
+﻿---
+# Planning / Deploying RHOSO 18.0 — pre-flight checks before any install tasks
+
+- name: Prerequisites — document required inputs
+  ansible.builtin.debug:
+    msg:
+      - "RHOSO Pre-requisites (Planning your deployment + Deploying Ch.1 prerequisites)"
+      - "Single CIQ (rhoso_details): set Deployment Mode=connected|disconnected"
+      - "Required: operational RHOCP cluster, cluster-admin kubeconfig, storage class"
+      - "Required: openstack + openstack-operators namespaces plan, pull secret"
+      - "When disconnected: fill Mirror Registry / CatalogSource / Operator Source in the same CIQ"
+      - "Required: rhoso_networks table (no hardcoded networks in templates)"
+      - "Required: Management Network Name + Internal API Network Name (or Purpose columns)"
+      - "CIQ cluster={{ cluster_name }} version={{ rhoso_product_version }}"
+      - "Deployment mode={{ rhoso_deployment_mode }} multi-env={{ rhoso_multi_env }}"
+      - "Management net={{ rhoso_mgmt_net }} Internal API net={{ rhoso_internalapi_net }}"
+
+- name: Prerequisites — assert core CIQ parameters
+  ansible.builtin.assert:
+    that:
+      - rhoso_kubeconfig | length > 0
+      - rhoso_storage_class | length > 0
+      - rhoso_openstack_ns | length > 0
+      - rhoso_operators_ns | length > 0
+      - rhoso_pull_secret | length > 0
+      - rhoso_networks | length > 0
+      - rhoso_mgmt_net | length > 0
+      - rhoso_internalapi_net | length > 0
+    fail_msg: >-
+      rhoso_details must include Kubeconfig Path, Storage Class,
+      OpenStack Namespace, OpenStack Operators Namespace, Pull Secret Path,
+      Management Network Name, Internal API Network Name; and rhoso_networks
+      must list at least one network.
+
+- name: Prerequisites — kubeconfig file exists
+  ansible.builtin.stat:
+    path: "{{ rhoso_kubeconfig }}"
+  register: rhoso_prereq_kube
+  delegate_to: localhost
+
+- name: Prerequisites — assert kubeconfig present
+  ansible.builtin.assert:
+    that:
+      - rhoso_prereq_kube.stat.exists
+    fail_msg: "Kubeconfig Path '{{ rhoso_kubeconfig }}' does not exist."
+
+- name: Prerequisites — pull secret file exists
+  ansible.builtin.stat:
+    path: "{{ rhoso_pull_secret }}"
+  register: rhoso_prereq_pull
+  delegate_to: localhost
+
+- name: Prerequisites — assert pull secret present
+  ansible.builtin.assert:
+    that:
+      - rhoso_prereq_pull.stat.exists
+    fail_msg: "Pull Secret Path '{{ rhoso_pull_secret }}' does not exist."
+
+- name: Prerequisites — oc whoami (cluster-admin access)
+  ansible.builtin.command:
+    cmd: oc whoami
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_whoami
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Prerequisites — verify cluster API reachable
+  ansible.builtin.command:
+    cmd: oc get nodes
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_nodes_chk
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Prerequisites — verify StorageClass exists on RHOCP
+  ansible.builtin.command:
+    cmd: oc get storageclass {{ rhoso_storage_class }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_sc_chk
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Prerequisites — disconnected mode requires mirror + catalog inputs
+  ansible.builtin.assert:
+    that:
+      - rhoso_mirror_registry | length > 0
+      - rhoso_catsrc_image | length > 0
+      - rhoso_operator_source | length > 0
+    fail_msg: >-
+      Deployment Mode=disconnected requires Mirror Registry URL,
+      CatalogSource Image, and Operator Source in rhoso_details.
+  when: rhoso_is_disconnected | bool
+
+- name: Prerequisites — summary
+  ansible.builtin.debug:
+    msg:
+      - "Authenticated as: {{ rhoso_whoami.stdout | default('n/a') }}"
+      - "StorageClass '{{ rhoso_storage_class }}' OK"
+      - "Worker/control nodes visible: {{ (rhoso_nodes_chk.stdout_lines | default([])) | length }} line(s)"
+      - "Pre-requisites satisfied for RHOSO {{ rhoso_product_version }}"

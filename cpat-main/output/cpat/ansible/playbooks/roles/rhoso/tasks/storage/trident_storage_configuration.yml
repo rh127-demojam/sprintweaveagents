@@ -1,0 +1,105 @@
+---
+# Install NetApp Trident CSI storage operator and configure backend + StorageClass.
+# Reference: NetApp Trident documentation + JIO D1.3_NetApp artifacts
+# Conditional: runs only when Trident Enabled = yes in CIQ
+
+- name: Trident storage — skip when not enabled
+  ansible.builtin.debug:
+    msg: "Trident storage is not enabled — skipping Trident configuration."
+  when: not (rhoso_trident_enabled | bool)
+
+- name: Trident storage configuration
+  when: rhoso_trident_enabled | bool
+  block:
+    - name: Trident storage — document procedure
+      ansible.builtin.debug:
+        msg:
+          - "Trident Storage Configuration (NetApp CSI)"
+          - "1) Install Trident operator (CRD + TridentOrchestrator)"
+          - "2) Create TridentBackendConfig with ONTAP credentials"
+          - "3) Create StorageClass {{ rhoso_trident_storage_class }}"
+          - "Driver: {{ rhoso_trident_storage_driver }}"
+          - "Management LIF: {{ rhoso_trident_mgmt_lif }}"
+          - "Data LIF: {{ rhoso_trident_data_lif }}"
+          - "SVM: {{ rhoso_trident_svm }}"
+
+    - name: Trident storage — validate required parameters
+      ansible.builtin.assert:
+        that:
+          - (rhoso_trident_storage_driver | default('') | string) | length > 0
+          - (rhoso_trident_mgmt_lif | default('') | string) | length > 0
+          - (rhoso_trident_svm | default('') | string) | length > 0
+        fail_msg: >-
+          Trident Enabled but missing required parameters. Set Trident Storage Driver Name,
+          Trident Management LIF, and Trident SVM in the CIQ.
+
+    - name: Trident storage — generate Trident manifests from CIQ
+      ansible.builtin.include_tasks: storage/_generate_storage_crs.yml
+      when: not (rhoso_skip_generation | bool)
+
+    - name: Trident storage — create trident namespace
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc apply -f - <<EOF
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ rhoso_trident_namespace }}
+        EOF
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_trident_ns
+      changed_when: "'created' in rhoso_trident_ns.stdout or 'configured' in rhoso_trident_ns.stdout"
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Trident storage — apply Trident manifests (Orchestrator + Backend + StorageClass)
+      ansible.builtin.command:
+        cmd: oc apply -f {{ rhoso_manifest_dir }}/openstack_trident.yaml
+      environment: "{{ rhoso_oc_env }}"
+      register: rhoso_trident_apply
+      changed_when: "'created' in rhoso_trident_apply.stdout or 'configured' in rhoso_trident_apply.stdout"
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Trident storage — wait for TridentOrchestrator installed
+      ansible.builtin.shell: |
+        set -euo pipefail
+        end=$((SECONDS+600))
+        while (( SECONDS < end )); do
+          status=$(oc get tridentorchestrator trident \
+            -n {{ rhoso_trident_namespace }} \
+            -o jsonpath='{.status.status}' 2>/dev/null || true)
+          echo "TridentOrchestrator status=${status}"
+          if [[ "${status}" == "Installed" ]]; then
+            exit 0
+          fi
+          sleep 15
+        done
+        echo "Timeout waiting for TridentOrchestrator Installed"
+        oc get tridentorchestrator -n {{ rhoso_trident_namespace }} || true
+        exit 1
+      args:
+        executable: /bin/bash
+      environment: "{{ rhoso_oc_env }}"
+      changed_when: false
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Trident storage — verify StorageClass created
+      ansible.builtin.command:
+        cmd: oc get storageclass {{ rhoso_trident_storage_class }}
+      environment: "{{ rhoso_oc_env }}"
+      changed_when: false
+      delegate_to: localhost
+      when: rhoso_can_apply | bool
+
+    - name: Trident storage — summary
+      ansible.builtin.debug:
+        msg:
+          - "Trident storage configuration complete"
+          - "StorageClass: {{ rhoso_trident_storage_class }}"
+          - "Backend: {{ rhoso_trident_backend_name }} ({{ rhoso_trident_storage_driver }})"
+          - "Manifest: {{ rhoso_manifest_dir }}/openstack_trident.yaml"
+          - "Applied: {{ rhoso_can_apply | bool }}"

@@ -1,0 +1,16 @@
+﻿---
+- name: RHOSO installation context
+  ansible.builtin.debug:
+    msg:
+      - "CPAT RHOSO Installation"
+      - "Cluster: {{ cluster_name }}"
+      - "RHOSO Version: {{ rhoso_version }}"
+      - "Task: {{ installation_task }}"
+      - "RHOSO inventory hosts: {{ groups.get('rhoso_clusters', []) }}"
+      - "Data plane nodes: {{ groups.get('rhoso_data_plane_nodes', []) }}"
+
+- name: Load shared RHOSO CIQ context
+  ansible.builtin.include_tasks: common/_load_ciq_context.yml
+
+- name: Run selected RHOSO installation task
+  ansible.builtin.include_tasks: "{{ installation_task }}.yml"

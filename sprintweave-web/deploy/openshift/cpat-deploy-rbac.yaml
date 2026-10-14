@@ -1,0 +1,51 @@
+# Grant SprintWeave API permission to Install CPAT on this OpenShift project.
+#   oc apply -f deploy/openshift/cpat-deploy-rbac.yaml
+#   oc set serviceaccount deployment/sprintweave-api sprintweave-api -n sprintweave
+#   oc rollout status deployment/sprintweave-api -n sprintweave
+#
+# Rebuild the API image with Dockerfile.bundle so ``oc`` is on PATH.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sprintweave-api
+  namespace: sprintweave
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sprintweave-cpat-deploy
+  namespace: sprintweave
+rules:
+  - apiGroups: ["build.openshift.io"]
+    resources:
+      - buildconfigs
+      - buildconfigs/instantiate
+      - buildconfigs/instantiatebinary
+      - builds
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["image.openshift.io"]
+    resources: ["imagestreams", "imagestreamtags"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sprintweave-cpat-deploy
+  namespace: sprintweave
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sprintweave-cpat-deploy
+subjects:
+  - kind: ServiceAccount
+    name: sprintweave-api
+    namespace: sprintweave

@@ -1,0 +1,40 @@
+---
+# Validate DNS records required for OCP installation.
+- name: Validate API DNS record resolves
+  ansible.builtin.command:
+    cmd: "dig +short api.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+  register: ocp_dns_api_check
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Validate API-INT DNS record resolves
+  ansible.builtin.command:
+    cmd: "dig +short api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+  register: ocp_dns_api_int_check
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Validate wildcard apps DNS record resolves
+  ansible.builtin.command:
+    cmd: "dig +short test.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }}"
+  register: ocp_dns_apps_check
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Report DNS validation results
+  ansible.builtin.debug:
+    msg:
+      - "api.{{ ocp_cluster_name }}.{{ ocp_base_domain }} => {{ ocp_dns_api_check.stdout | default('NOT RESOLVED') }}"
+      - "api-int.{{ ocp_cluster_name }}.{{ ocp_base_domain }} => {{ ocp_dns_api_int_check.stdout | default('NOT RESOLVED') }}"
+      - "*.apps.{{ ocp_cluster_name }}.{{ ocp_base_domain }} => {{ ocp_dns_apps_check.stdout | default('NOT RESOLVED') }}"
+
+- name: Warn if DNS records are missing
+  ansible.builtin.debug:
+    msg: "WARNING: One or more DNS records did not resolve. Ensure DNS is configured before proceeding."
+  when: >
+    (ocp_dns_api_check.stdout | default('') | length == 0) or
+    (ocp_dns_api_int_check.stdout | default('') | length == 0) or
+    (ocp_dns_apps_check.stdout | default('') | length == 0)

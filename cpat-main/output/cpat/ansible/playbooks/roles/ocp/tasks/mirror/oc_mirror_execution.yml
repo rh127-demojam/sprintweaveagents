@@ -1,0 +1,350 @@
+---
+# Execute oc-mirror to mirror OCP release images to local Quay registry.
+#
+# Disconnected mode:
+#   1. oc-mirror binary must be pre-staged on the bastion
+#   2. A mirror archive (from 'oc-mirror --to disk') must be pre-staged
+#   3. This task runs 'oc-mirror --from <archive>' to push to local registry
+#
+# Connected mode:
+#   Runs 'oc-mirror' directly to pull from Red Hat and push to local registry
+
+- name: Check for oc-mirror binary on bastion
+  ansible.builtin.command:
+    cmd: which oc-mirror
+  register: _oc_mirror_bin
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Install oc-mirror from pre-staged tarball
+  when: _oc_mirror_bin.rc != 0
+  block:
+    - name: Check for oc-mirror tarball on bastion
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _oc_mirror_tar_check
+      loop:
+        - "{{ ocp_install_dir }}/oc-mirror-rhel9-linux-amd64.tar.gz"
+        - "{{ ocp_install_dir }}/oc-mirror-rhel9-linux-amd64.tar"
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Set oc-mirror tarball path (bastion)
+      ansible.builtin.set_fact:
+        _oc_mirror_tarball: "{{ (_oc_mirror_tar_check.results | selectattr('stat.exists', 'defined') | selectattr('stat.exists', 'equalto', true) | map(attribute='item') | first) | default('') }}"
+
+    - name: Check if CPAT has bundled oc-mirror
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _cpat_ocm_check
+      loop:
+        - /app/mirror-artifacts/oc-mirror-rhel9-linux-amd64.tar.gz
+        - /app/mirror-artifacts/oc-mirror-rhel9-linux-amd64.tar
+      delegate_to: localhost
+      when: _oc_mirror_tarball | length == 0
+
+    - name: Set CPAT bundled oc-mirror path
+      ansible.builtin.set_fact:
+        _cpat_ocm_src: "{{ (_cpat_ocm_check.results | default([]) | selectattr('stat', 'defined') | selectattr('stat.exists', 'equalto', true) | map(attribute='item') | first) | default('') }}"
+      when: _oc_mirror_tarball | length == 0
+
+    - name: Set CPAT bundled oc-mirror path empty
+      ansible.builtin.set_fact:
+        _cpat_ocm_src: ""
+      when: _oc_mirror_tarball | length > 0
+
+    - name: Copy oc-mirror tarball from CPAT to bastion
+      ansible.builtin.copy:
+        src: "{{ _cpat_ocm_src }}"
+        dest: "{{ ocp_install_dir }}/{{ _cpat_ocm_src | basename }}"
+        mode: "0644"
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      when:
+        - _oc_mirror_tarball | length == 0
+        - _cpat_ocm_src | length > 0
+
+    - name: Set oc-mirror tarball path after CPAT copy
+      ansible.builtin.set_fact:
+        _oc_mirror_tarball: "{{ ocp_install_dir }}/{{ _cpat_ocm_src | basename }}"
+      when:
+        - _oc_mirror_tarball | length == 0
+        - _cpat_ocm_src | length > 0
+
+    - name: Extract and install oc-mirror
+      ansible.builtin.shell:
+        cmd: >-
+          tar xf {{ _oc_mirror_tarball }} -C /usr/local/bin/ oc-mirror
+          && chmod +x /usr/local/bin/oc-mirror
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      become: true
+      when: _oc_mirror_tarball | length > 0
+
+    - name: Fail if oc-mirror not available
+      ansible.builtin.fail:
+        msg: |
+          oc-mirror binary not found and no tarball available.
+          Place the tarball at: {{ ocp_install_dir }}/oc-mirror-rhel9-linux-amd64.tar.gz
+          Or include it in CPAT build under binaries/oc-mirror-rhel9-linux-amd64.tar.gz
+          Download from: console.redhat.com/openshift/downloads → "OpenShift mirror plugin"
+      when: _oc_mirror_tarball | length == 0
+
+    - name: Verify oc-mirror installed
+      ansible.builtin.command:
+        cmd: oc-mirror version
+      changed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Add Quay root CA to bastion trust store
+  block:
+    - name: Copy Quay root CA to system anchors
+      ansible.builtin.copy:
+        src: "{{ ocp_quay_root_directory | default('/opt/quay') }}/quay-rootCA/rootCA.pem"
+        dest: /etc/pki/ca-trust/source/anchors/quay-rootCA.pem
+        remote_src: true
+        mode: "0644"
+      become: true
+
+    - name: Update CA trust
+      ansible.builtin.command:
+        cmd: update-ca-trust
+      changed_when: true
+      become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Prepare pull secret with local registry credentials
+  block:
+    - name: Read existing pull secret
+      ansible.builtin.slurp:
+        src: "{{ ocp_install_dir }}/pull-secret.json"
+      register: _pull_secret_raw
+      no_log: true
+
+    - name: Merge local Quay registry credentials into pull secret
+      ansible.builtin.copy:
+        content: |
+          {{ _merged_pull_secret | to_nice_json }}
+        dest: "{{ ocp_install_dir }}/mirror-pull-secret.json"
+        mode: "0600"
+      no_log: true
+      vars:
+        _existing: "{{ _pull_secret_raw.content | b64decode | from_json }}"
+        _quay_auth: "{{ (ocp_quay_init_user | default('init') + ':' + ocp_quay_init_password | default('cpat2026')) | b64encode }}"
+        _quay_entry:
+          auth: "{{ _quay_auth }}"
+        _merged_pull_secret: "{{ _existing | combine({'auths': _existing.get('auths', {}) | combine({ ocp_mirror_registry_url: _quay_entry })}, recursive=true) }}"
+
+    - name: Set registry auth for oc-mirror
+      ansible.builtin.shell:
+        cmd: |
+          mkdir -p ~/.docker /root/.docker
+          cp {{ ocp_install_dir }}/mirror-pull-secret.json ~/.docker/config.json
+          cp {{ ocp_install_dir }}/mirror-pull-secret.json /root/.docker/config.json
+          chmod 600 ~/.docker/config.json /root/.docker/config.json
+      become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Generate ImageSetConfiguration for oc-mirror
+  ansible.builtin.template:
+    src: ocp_mirror_imageset.yaml.j2
+    dest: "{{ ocp_manifest_dir }}/imageset-config.yaml"
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Copy ImageSetConfiguration to bastion
+  ansible.builtin.copy:
+    src: "{{ ocp_manifest_dir }}/imageset-config.yaml"
+    dest: "{{ ocp_install_dir }}/imageset-config.yaml"
+    mode: "0644"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+# --- Disconnected: check for pre-staged mirror archive ---
+- name: Check for pre-staged oc-mirror archive (disconnected)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: _mirror_archive_check
+  loop:
+    - "{{ ocp_mirror_archive_path | default('') }}"
+    - "{{ ocp_install_dir }}/mirror_seq1_000000.tar"
+    - "/tmp/mirror_seq1_000000.tar"
+    - "{{ ocp_install_dir }}/oc-mirror-workspace"
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: item | length > 0
+
+- name: Set mirror archive path
+  ansible.builtin.set_fact:
+    _mirror_archive: "{{ (_mirror_archive_check.results | selectattr('stat', 'defined') | selectattr('stat.exists', 'equalto', true) | map(attribute='item') | first) | default('') }}"
+
+# --- Run oc-mirror ---
+- name: Run oc-mirror from pre-staged archive (disconnected)
+  when:
+    - ocp_apply_manifests | bool
+    - _mirror_archive | length > 0
+  block:
+    - name: Run oc-mirror --from archive (async with log)
+      ansible.builtin.shell:
+        cmd: >-
+          /usr/local/bin/oc-mirror
+          -c {{ ocp_install_dir }}/imageset-config.yaml
+          --from {{ _mirror_archive }}
+          docker://{{ ocp_mirror_registry_url }}
+          --dest-tls-verify=false
+          --v2
+          > {{ ocp_install_dir }}/oc-mirror.log 2>&1
+      register: _oc_mirror_job
+      async: 7200
+      poll: 0
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      become: true
+
+    - name: Wait for oc-mirror to complete (disconnected)
+      ansible.builtin.async_status:
+        jid: "{{ _oc_mirror_job.ansible_job_id }}"
+      register: _oc_mirror_result
+      until: _oc_mirror_result.finished
+      retries: 240
+      delay: 30
+      failed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      become: true
+
+    - name: Fetch oc-mirror log to CPAT (disconnected)
+      ansible.builtin.fetch:
+        src: "{{ ocp_install_dir }}/oc-mirror.log"
+        dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-oc-mirror.log"
+        flat: true
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      failed_when: false
+
+- name: Run oc-mirror direct to registry (no archive — download from Red Hat)
+  when:
+    - ocp_apply_manifests | bool
+    - _mirror_archive | length == 0
+  block:
+    - name: Note — downloading OCP images directly from Red Hat
+      ansible.builtin.debug:
+        msg: >-
+          No pre-staged mirror archive found. Downloading OCP {{ ocp_version }}
+          images directly from Red Hat → {{ ocp_mirror_registry_url }}.
+          This may take 30-60 minutes.
+
+    - name: Run oc-mirror direct to registry (async with log)
+      ansible.builtin.shell:
+        cmd: >-
+          /usr/local/bin/oc-mirror
+          -c {{ ocp_install_dir }}/imageset-config.yaml
+          --workspace file://{{ ocp_install_dir }}/oc-mirror-workspace
+          docker://{{ ocp_mirror_registry_url }}
+          --dest-tls-verify=false
+          --v2
+          > {{ ocp_install_dir }}/oc-mirror.log 2>&1
+      register: _oc_mirror_job
+      async: 7200
+      poll: 0
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      become: true
+
+    - name: Wait for oc-mirror to complete (connected)
+      ansible.builtin.async_status:
+        jid: "{{ _oc_mirror_job.ansible_job_id }}"
+      register: _oc_mirror_result
+      until: _oc_mirror_result.finished
+      retries: 240
+      delay: 30
+      failed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      become: true
+
+    - name: Fetch oc-mirror log to CPAT (connected)
+      ansible.builtin.fetch:
+        src: "{{ ocp_install_dir }}/oc-mirror.log"
+        dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-oc-mirror.log"
+        flat: true
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      failed_when: false
+
+- name: Display oc-mirror results
+  ansible.builtin.debug:
+    msg: "{{ (_oc_mirror_result.stdout_lines | default([]))[-15:] | default(['oc-mirror skipped — generate mode']) }}"
+  when: _oc_mirror_result is defined
+
+- name: oc-mirror complete
+  ansible.builtin.debug:
+    msg: >-
+      OCP release images mirrored to {{ ocp_mirror_registry_url }}.
+      IDMS/ITMS manifests may have been generated in the oc-mirror workspace.
+  when: _oc_mirror_result is defined and _oc_mirror_result.finished | default(false)

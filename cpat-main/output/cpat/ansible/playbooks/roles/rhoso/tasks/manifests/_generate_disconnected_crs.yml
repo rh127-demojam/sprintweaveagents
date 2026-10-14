@@ -1,0 +1,61 @@
+---
+# Render disconnected-environment manifests from CIQ (no cluster apply).
+# Used by: manifest_generation.yml and disconnected_environment_preparation.yml
+
+- name: Disconnected CRs — generate ImageDigestMirrorSet
+  ansible.builtin.template:
+    src: image_digest_mirror_set.yaml.j2
+    dest: "{{ rhoso_manifest_dir }}/image_digest_mirror_set.yaml"
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Disconnected CRs — generate ImageTagMirrorSet
+  ansible.builtin.template:
+    src: image_tag_mirror_set.yaml.j2
+    dest: "{{ rhoso_manifest_dir }}/image_tag_mirror_set.yaml"
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Disconnected CRs — generate CatalogSource
+  ansible.builtin.template:
+    src: catalog_source.yaml.j2
+    dest: "{{ rhoso_manifest_dir }}/catalog_source.yaml"
+    mode: "0644"
+  delegate_to: localhost
+
+- name: Disconnected CRs — generate OperatorHub disable-defaults
+  ansible.builtin.template:
+    src: operatorhub_disable_defaults.yaml.j2
+    dest: "{{ rhoso_manifest_dir }}/operatorhub_disable_defaults.yaml"
+    mode: "0644"
+  delegate_to: localhost
+  when: rhoso_disable_default_catsrc in ['yes', 'true', '1']
+
+- name: Disconnected CRs — write disconnected CR checklist
+  ansible.builtin.copy:
+    dest: "{{ rhoso_manifest_dir }}/REQUIRED_CRDS_DISCONNECTED.md"
+    mode: "0644"
+    content: |
+      # Disconnected RHOSO — mirror resources
+
+      | Resource | File |
+      |----------|------|
+      | ImageDigestMirrorSet | image_digest_mirror_set.yaml |
+      | ImageTagMirrorSet | image_tag_mirror_set.yaml |
+      | CatalogSource | catalog_source.yaml |
+      | OperatorHub (optional) | operatorhub_disable_defaults.yaml |
+
+      Mirror registry: {{ rhoso_mirror_registry }}
+      Catalog image: {{ rhoso_catsrc_image }}
+      Operator Subscription source: {{ rhoso_operator_source }}
+      Data plane registry: {{ rhoso_effective_dp_registry }}
+  delegate_to: localhost
+
+- name: Disconnected CRs — generation summary
+  ansible.builtin.debug:
+    msg:
+      - "Generated disconnected manifests in {{ rhoso_manifest_dir }}"
+      - "  - image_digest_mirror_set.yaml"
+      - "  - image_tag_mirror_set.yaml"
+      - "  - catalog_source.yaml"
+      - "Review in CPAT UI (Artifacts) before Disconnected Environment Preparation apply."

@@ -1,0 +1,229 @@
+﻿---
+# Deploying RHOSO 18.0 — Chapter 4: Creating the control plane
+# Generates + applies CRs that depend on Operator CRDs listed in defaults.
+
+- name: Control plane — document procedure steps
+  ansible.builtin.debug:
+    msg:
+      - "RHOSO Control Plane Deployment and Verification"
+      - "Reference: Deploying RHOSO 18.0 Chapter 4"
+      - "Required CRDs: OpenStackControlPlane, NetConfig, NAD, NNCP, MetalLB pools"
+      - "1) Verify CRDs installed by Operators"
+      - "2) Generate NNCP / NAD / MetalLB / NetConfig / OpenStackControlPlane CRs from CIQ"
+      - "3) Apply supporting network CRs then OpenStackControlPlane"
+      - "4) Wait for Ready / Setup complete"
+      - "5) Verify pods and openstackclient"
+
+- name: Control plane — verify required CRDs
+  ansible.builtin.include_tasks: common/_verify_required_crds.yml
+  vars:
+    rhoso_crd_check_list: "{{ rhoso_required_crds_control_plane }}"
+
+- name: Control plane — generate all related CRs from CIQ
+  ansible.builtin.include_tasks: control_plane/_generate_control_plane_crs.yml
+  when: not (rhoso_skip_generation | bool)
+
+- name: Control plane — require reviewed control-plane manifests when skipping generation
+  ansible.builtin.stat:
+    path: "{{ rhoso_manifest_dir }}/{{ item }}"
+  register: rhoso_cp_manifest_stats
+  loop:
+    - openstack_nncp.yaml
+    - openstack_nad.yaml
+    - openstack_metallb.yaml
+    - openstack_netconfig.yaml
+    - openstack_control_plane.yaml
+  delegate_to: localhost
+  when: rhoso_skip_generation | bool
+
+- name: Control plane — assert reviewed control-plane manifests exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      Reviewed manifest missing: {{ item.item }} under {{ rhoso_manifest_dir }}.
+      Run "Generate Manifests for Review", inspect artifacts in the UI, then re-run this task.
+  loop: "{{ rhoso_cp_manifest_stats.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('n/a') }}"
+  when: rhoso_skip_generation | bool
+
+- name: Control plane prerequisites — require Storage Class from CIQ
+  ansible.builtin.assert:
+    that:
+      - rhoso_storage_class | length > 0
+    fail_msg: >-
+      Set 'Storage Class' in rhoso_details (OpenStackControlPlane.spec.storageClass).
+
+- name: Control plane prerequisites — check NetworkPolicies do not block operators
+  ansible.builtin.command:
+    cmd: oc get networkpolicy -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_netpol
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane prerequisites — warn if NetworkPolicies exist
+  ansible.builtin.debug:
+    msg: >-
+      NetworkPolicies found in '{{ rhoso_openstack_ns }}'. Ensure they do not prevent
+      communication between '{{ rhoso_operators_ns }}' and the control plane namespace.
+      Output: {{ rhoso_netpol.stdout | default('n/a') }}
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_netpol.rc == 0
+    - "'No resources found' not in (rhoso_netpol.stdout | default(''))"
+
+- name: Control plane prerequisites — verify OpenStack Operator is installed
+  ansible.builtin.command:
+    cmd: >-
+      oc get csv -n {{ rhoso_operators_ns }}
+      -o jsonpath={.items[?(@.spec.displayName=="OpenStack Operator")].status.phase}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_operator_csv
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane prerequisites — assert OpenStack Operator Succeeded
+  ansible.builtin.assert:
+    that:
+      - "'Succeeded' in (rhoso_operator_csv.stdout | default(''))"
+    fail_msg: >-
+      OpenStack Operator is not installed/Succeeded in '{{ rhoso_operators_ns }}'.
+      Run 'OpenStack Operator Installation and Preparation' first.
+  when: rhoso_can_apply | bool
+
+- name: Control plane prerequisites — verify NetConfig exists (data plane networks prepared)
+  ansible.builtin.command:
+    cmd: oc get netconfig openstacknetconfig -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_netconfig_chk
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane prerequisites — warn if NetConfig missing
+  ansible.builtin.debug:
+    msg: >-
+      NetConfig 'openstacknetconfig' not found. Run 'Network Preparation' before
+      control plane if isolated networks are required.
+  when:
+    - rhoso_can_apply | bool
+    - rhoso_netconfig_chk.rc != 0
+
+- name: Control plane — verify osp-secret exists
+  ansible.builtin.command:
+    cmd: oc get secret {{ rhoso_osp_secret_name }} -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_osp_secret_chk
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane — assert service Secret is present
+  ansible.builtin.assert:
+    that:
+      - rhoso_osp_secret_chk.rc == 0
+    fail_msg: >-
+      Secret '{{ rhoso_osp_secret_name }}' missing in '{{ rhoso_openstack_ns }}'.
+      Run 'RHOCP Preparation for RHOSO' to create secure access Secret.
+  when: rhoso_can_apply | bool
+
+- name: Control plane — generate Ceph secret when Ceph External is enabled
+  ansible.builtin.include_tasks: secrets/generate_ceph_secret.yml
+  when:
+    - rhoso_ceph_external | bool
+    - not (rhoso_skip_generation | bool)
+
+- name: Control plane — apply supporting network CRs (NNCP, NAD, MetalLB, NetConfig)
+  ansible.builtin.command:
+    cmd: oc apply -f {{ item }}
+  environment: "{{ rhoso_oc_env }}"
+  loop:
+    - "{{ rhoso_manifest_dir }}/openstack_nncp.yaml"
+    - "{{ rhoso_manifest_dir }}/openstack_nad.yaml"
+    - "{{ rhoso_manifest_dir }}/openstack_metallb.yaml"
+    - "{{ rhoso_manifest_dir }}/openstack_netconfig.yaml"
+  register: rhoso_cp_net_apply
+  changed_when: "'created' in stdout or 'configured' in stdout"
+  failed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane — apply OpenStackControlPlane CR
+  ansible.builtin.command:
+    cmd: >-
+      oc apply -f {{ rhoso_manifest_dir }}/openstack_control_plane.yaml
+      -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_cp_apply
+  changed_when: "'created' in rhoso_cp_apply.stdout or 'configured' in rhoso_cp_apply.stdout"
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane — wait for Setup complete
+  ansible.builtin.shell: |
+    set -euo pipefail
+    end=$((SECONDS+{{ (rhoso_wait_timeout | regex_replace('m$','') | int) * 60 }}))
+    while (( SECONDS < end )); do
+      msg=$(oc get openstackcontrolplane {{ rhoso_control_plane_name }} \
+        -n {{ rhoso_openstack_ns }} \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null || true)
+      status=$(oc get openstackcontrolplane {{ rhoso_control_plane_name }} \
+        -n {{ rhoso_openstack_ns }} \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+      echo "OpenStackControlPlane Ready status=${status} message=${msg}"
+      if [[ "${status}" == "True" ]] || [[ "${msg}" == *"Setup complete"* ]]; then
+        exit 0
+      fi
+      sleep 30
+    done
+    echo "Timed out waiting for OpenStackControlPlane Setup complete"
+    oc get openstackcontrolplane -n {{ rhoso_openstack_ns }} || true
+    exit 1
+  args:
+    executable: /bin/bash
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_cp_wait
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane — list control plane pods
+  ansible.builtin.command:
+    cmd: oc get pods -n {{ rhoso_openstack_ns }}
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_cp_pods
+  changed_when: false
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane — verify openstackclient pod exists
+  ansible.builtin.command:
+    cmd: >-
+      oc get pods -n {{ rhoso_openstack_ns }}
+      -l service=openstackclient
+      -o name
+  environment: "{{ rhoso_oc_env }}"
+  register: rhoso_openstackclient
+  changed_when: false
+  failed_when: rhoso_openstackclient.stdout | length == 0
+  delegate_to: localhost
+  when: rhoso_can_apply | bool
+
+- name: Control plane — verification summary
+  ansible.builtin.debug:
+    msg:
+      - "Control plane deployment verification"
+      - "OpenStackControlPlane: {{ rhoso_control_plane_name }}"
+      - "Namespace: {{ rhoso_openstack_ns }}"
+      - "openstackclient: {{ rhoso_openstackclient.stdout | default('not checked') }}"
+      - "Access CLI: oc rsh -n {{ rhoso_openstack_ns }} openstackclient"
+      - "Pods:"
+      - "{{ rhoso_cp_pods.stdout_lines | default(['(apply disabled — manifests only)']) }}"

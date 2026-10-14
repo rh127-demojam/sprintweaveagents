@@ -1,0 +1,185 @@
+apiVersion: dataplane.openstack.org/v1beta1
+kind: OpenStackDataPlaneNodeSet
+metadata:
+  name: {{ rhoso_nodeset_name }}
+  namespace: {{ rhoso_openstack_ns }}
+spec:
+  env:
+    - name: ANSIBLE_FORCE_COLOR
+      value: "True"
+  preProvisioned: {{ (rhoso_dp_mode == 'pre-provisioned') | ternary('true', 'false') }}
+  services:
+{% if rhoso_sub_method == 'activation_key' or rhoso_sub_method == 'username_password' %}
+    - redhat
+{% endif %}
+    - bootstrap
+    - download-cache
+    - configure-network
+    - validate-network
+    - install-os
+    - configure-os
+    - ssh-known-hosts
+    - run-os
+    - reboot-os
+    - install-certs
+    - ovn
+    - neutron-metadata
+    - libvirt
+    - nova
+{% if rhoso_telemetry_enabled | bool %}
+    - telemetry
+{% endif %}
+{% if rhoso_dp_mode == 'unprovisioned' %}
+  baremetalSetTemplate:
+    deploymentSSHSecret: {{ rhoso_ansible_ssh_secret_name }}
+    bmhNamespace: {{ rhoso_openstack_ns }}
+    cloudUserName: {{ rhoso_dp_ssh_user }}
+    bmhLabelSelector:
+      app: openstack
+{% set provisioning_nics = rhoso_nodes | selectattr('Provisioning NIC', 'defined') | selectattr('Provisioning NIC', 'ne', '') | list %}
+{% if provisioning_nics | length > 0 %}
+    ctlplaneInterface: {{ provisioning_nics[0]['Provisioning NIC'] }}
+{% endif %}
+{% endif %}
+  networkAttachments:
+    - {{ rhoso_mgmt_net }}
+  nodeTemplate:
+    ansibleSSHPrivateKeySecret: {{ rhoso_ansible_ssh_secret_name }}
+    managementNetwork: {{ rhoso_mgmt_net }}
+    ansible:
+      ansibleUser: {{ rhoso_dp_ssh_user }}
+      ansiblePort: 22
+{% if rhoso_subscription_secret_name | length > 0 or rhoso_registry_secret_name | length > 0 %}
+      ansibleVarsFrom:
+{% if rhoso_subscription_secret_name | length > 0 %}
+        - secretRef:
+            name: {{ rhoso_subscription_secret_name }}
+{% endif %}
+{% if rhoso_registry_secret_name | length > 0 %}
+        - secretRef:
+            name: {{ rhoso_registry_secret_name }}
+{% endif %}
+{% endif %}
+      ansibleVars:
+        edpm_bootstrap_release_version_package: []
+        gather_facts: false
+        enable_debug: true
+{% if (rhoso_ciq['NTP Servers'] | default('') | string) | length > 0 %}
+        timesync_ntp_servers:
+{% for ntp in rhoso_ciq['NTP Servers'].split(',') %}
+          - hostname: {{ ntp | trim }}
+            iburst: yes
+{% endfor %}
+{% endif %}
+        neutron_physical_bridge_name: {{ rhoso_physical_bridge_name }}
+{% if (rhoso_ciq['Public Interface'] | default('') | string) | length > 0 %}
+        neutron_public_interface_name: {{ rhoso_ciq['Public Interface'] }}
+{% endif %}
+        edpm_network_config_nmstate: {{ rhoso_edpm_net_nmstate | bool | ternary('true', 'false') }}
+        edpm_network_config_update: {{ rhoso_edpm_net_update | bool | ternary('true', 'false') }}
+{% if (rhoso_edpm_ovn_bridge_mappings | default('') | string) | length > 0 %}
+        edpm_ovn_bridge_mappings:
+{% for mapping in rhoso_edpm_ovn_bridge_mappings.split(',') %}
+         - {{ mapping | trim }}
+{% endfor %}
+{% endif %}
+{% if (rhoso_edpm_sshd_allowed_ranges | default('') | string) | length > 0 %}
+        edpm_sshd_allowed_ranges:
+{% for cidr in rhoso_edpm_sshd_allowed_ranges.split(',') %}
+          - '{{ cidr | trim }}'
+{% endfor %}
+{% endif %}
+{% if (rhoso_edpm_tuned_profile | default('') | string) | length > 0 %}
+        edpm_tuned_profile: "{{ rhoso_edpm_tuned_profile }}"
+{% endif %}
+{% if (rhoso_edpm_kernel_args | default('') | string) | length > 0 %}
+        edpm_kernel_args: "{{ rhoso_edpm_kernel_args }}"
+{% endif %}
+{% set mapping_nodes = rhoso_nodes | selectattr('NIC1 MAC', 'defined') | selectattr('NIC1 MAC', 'ne', '') | list %}
+{% if mapping_nodes | length > 0 %}
+        edpm_network_config_os_net_config_mappings:
+{% for node in mapping_nodes %}
+          {{ node['Node Name'] }}:
+            {{ rhoso_edpm_nic1_name }}: {{ node['NIC1 MAC'] }}
+{% if (node['NIC2 MAC'] | default('') | string) | length > 0 %}
+            {{ rhoso_edpm_nic2_name }}: {{ node['NIC2 MAC'] }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if rhoso_is_disconnected | default(false) | bool %}
+{% if rhoso_effective_dp_registry | default('') | length > 0 %}
+        edpm_container_registry_insecure: false
+        edpm_container_image_prepare_args: |
+          --namespace {{ rhoso_effective_dp_registry }}
+{% endif %}
+{% if rhoso_satellite_url | default('') | length > 0 %}
+        rhsm_satellite_url: {{ rhoso_satellite_url }}
+{% endif %}
+{% endif %}
+{% if (rhoso_edpm_bootstrap_command | default('') | string) | length > 0 %}
+        edpm_bootstrap_command: |
+{{ rhoso_edpm_bootstrap_command | indent(10, true) }}
+{% elif rhoso_is_disconnected | default(false) | bool %}
+        edpm_bootstrap_command: |
+{% if rhoso_sub_method == 'activation_key' %}
+          subscription-manager register --org={{ rhoso_rh_org }} --activationkey={{ rhoso_rh_activation_key }} || true
+{% endif %}
+{% if rhoso_dp_yum_mirror | default('') | length > 0 %}
+          curl -fsSL -o /etc/yum.repos.d/rhoso-mirror.repo {{ rhoso_dp_yum_mirror }}/rhoso.repo || true
+{% endif %}
+{% elif rhoso_sub_method == 'activation_key' %}
+        edpm_bootstrap_command: |
+          subscription-manager register --org={{ rhoso_rh_org }} --activationkey={{ rhoso_rh_activation_key }}
+{% endif %}
+        edpm_network_config_template: |
+{% filter indent(width=10, first=true) %}
+{% include 'edpm_network_config_template.j2' %}
+{% endfilter %}
+{% if (rhoso_ciq['Data Plane Ansible EE Image'] | default('') | string) | length > 0 %}
+    ansibleEE:
+      image: {{ rhoso_ciq['Data Plane Ansible EE Image'] }}
+{% elif rhoso_is_disconnected | default(false) | bool and (rhoso_effective_dp_registry | default('') | string) | length > 0 %}
+    ansibleEE:
+      image: {{ rhoso_effective_dp_registry }}/openstack-ansibleee-operator:latest
+{% endif %}
+    networks:
+{% for net in rhoso_networks %}
+      - name: {{ net['Network Name'] }}
+        subnetName: {{ net['Subnet Name'] }}
+{% endfor %}
+  nodes:
+{% for node in rhoso_nodes %}
+{% set node_mgmt_ip = node['Management IP'] | default(node['ctlplane IP'] | default('')) %}
+    {{ node['Node Name'] }}:
+      hostName: {{ node['Node Name'] }}
+      ansible:
+        ansibleHost: {{ node['Ansible Host'] | default(node['Node Name']) }}
+{% if (node.get('fqdn_internal_api', '') | default('') | string) | length > 0 %}
+        ansibleVars:
+          fqdn_internal_api: {{ node['fqdn_internal_api'] }}
+{% endif %}
+      networks:
+{% for net in rhoso_networks %}
+        - name: {{ net['Network Name'] }}
+          subnetName: {{ net['Subnet Name'] }}
+{% if net['Network Name'] == rhoso_mgmt_net and node_mgmt_ip | length > 0 %}
+          defaultRoute: true
+          fixedIP: {{ node_mgmt_ip }}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% if rhoso_ceph_external | bool %}
+  extraMounts:
+    - extraVol:
+        - propagation:
+            - {{ rhoso_nodeset_name }}
+          extraVolType: Ceph
+          volumes:
+            - name: ceph
+              secret:
+                secretName: ceph-conf-files
+          mounts:
+            - name: ceph
+              mountPath: /etc/ceph
+              readOnly: true
+{% endif %}

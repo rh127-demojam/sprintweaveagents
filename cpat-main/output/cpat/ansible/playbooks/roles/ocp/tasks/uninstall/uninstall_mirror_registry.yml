@@ -1,0 +1,124 @@
+---
+# Uninstall Quay mirror-registry from bastion.
+# Uses async for the main command + include_tasks loop for live output in CPAT UI.
+
+- name: Run full uninstall (async)
+  ansible.builtin.shell:
+    cmd: |
+      LOG="{{ ocp_install_dir }}/mirror-registry-uninstall.log"
+      echo "=== CPAT Mirror Registry Uninstall ===" > $LOG
+      echo "Started: $(date)" >> $LOG
+
+      if [ -f /tmp/mirror-registry ]; then
+        echo "" >> $LOG
+        echo "=== Step 1/6: Running mirror-registry uninstall ===" >> $LOG
+        echo y | /tmp/mirror-registry uninstall --quayRoot {{ ocp_quay_root_directory | default('/opt/quay') }} -v >> $LOG 2>&1 || true
+      else
+        echo "=== Step 1/6: mirror-registry binary not found — skipping ===" >> $LOG
+      fi
+
+      echo "" >> $LOG
+      echo "=== Step 2/6: Removing Quay systemd services ===" >> $LOG
+      systemctl stop quay-app.service quay-postgres.service quay-redis.service 2>/dev/null || true
+      systemctl disable quay-app.service quay-postgres.service quay-redis.service 2>/dev/null || true
+      rm -f /etc/systemd/system/quay-*.service
+      systemctl daemon-reload
+      echo "Systemd services removed" >> $LOG
+
+      echo "" >> $LOG
+      echo "=== Step 3/6: Removing containers and volumes ===" >> $LOG
+      podman stop -t 10 quay-app quay-postgres quay-redis 2>/dev/null || true
+      podman rm -f quay-app quay-postgres quay-redis 2>/dev/null || true
+      podman ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -i 'infra\|pause\|quay' | xargs -r podman rm -f 2>/dev/null || true
+      podman pod rm --all --force 2>/dev/null || true
+      podman ps -aq --filter 'name!=cpat' | xargs -r podman rm -f 2>/dev/null || true
+      podman volume rm -f quay-storage sqlite-storage quay-postgres quay-redis 2>/dev/null || true
+      podman volume rm --all --force 2>/dev/null || true
+      echo "Containers and volumes removed" >> $LOG
+
+      echo "" >> $LOG
+      echo "=== Step 4/6: Removing Quay data directory ===" >> $LOG
+      rm -rf {{ ocp_quay_root_directory | default('/opt/quay') }}
+      echo "Removed {{ ocp_quay_root_directory | default('/opt/quay') }}" >> $LOG
+
+      echo "" >> $LOG
+      echo "=== Step 5/6: Removing container images ===" >> $LOG
+      podman rmi registry.redhat.io/quay/quay-rhel8 2>> $LOG || true
+      podman rmi registry.redhat.io/rhel8/postgresql-10 2>> $LOG || true
+      podman rmi registry.redhat.io/rhel8/redis-6 2>> $LOG || true
+      podman rmi registry.access.redhat.com/ubi8/pause 2>> $LOG || true
+      podman rmi quay.io/quay/mirror-registry-ee 2>> $LOG || true
+      podman image prune -a -f >> $LOG 2>&1 || true
+      echo "Container images removed" >> $LOG
+
+      echo "" >> $LOG
+      echo "=== Step 6/6: Cleaning up certs, auth, workspace ===" >> $LOG
+      rm -f /etc/pki/ca-trust/source/anchors/quay-rootCA.pem
+      update-ca-trust
+      rm -f /root/.docker/config.json
+      rm -f {{ ocp_install_dir }}/mirror-pull-secret.json
+      rm -rf {{ ocp_install_dir }}/oc-mirror-workspace
+      echo "Cleanup complete" >> $LOG
+
+      echo "" >> $LOG
+      echo "=== Uninstall Complete ===" >> $LOG
+      echo "Remaining containers: $(podman ps -a --format '{{ '{{' }}.Names{{ '}}' }}' 2>/dev/null | tr '\n' ' ')" >> $LOG
+      echo "Disk: $(df -h / --output=avail | tail -1) free" >> $LOG
+      echo "Finished: $(date)" >> $LOG
+  become: true
+  failed_when: false
+  async: 1800
+  poll: 0
+  register: _uninstall_job
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Wait for uninstall to complete
+  ansible.builtin.async_status:
+    jid: "{{ _uninstall_job.ansible_job_id }}"
+  register: _uninstall_result
+  until: _uninstall_result.finished
+  retries: 80
+  delay: 15
+  failed_when: false
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Fetch uninstall log to CPAT
+  ansible.builtin.fetch:
+    src: "{{ ocp_install_dir }}/mirror-registry-uninstall.log"
+    dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-mirror-registry-uninstall.log"
+    flat: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  failed_when: false
+
+- name: Display full uninstall log
+  ansible.builtin.shell:
+    cmd: cat {{ ocp_install_dir }}/mirror-registry-uninstall.log 2>/dev/null
+  register: _final_log
+  changed_when: false
+  become: true
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Mirror registry uninstall complete
+  ansible.builtin.debug:
+    msg: "{{ _final_log.stdout_lines | default(['Cleanup complete']) }}"

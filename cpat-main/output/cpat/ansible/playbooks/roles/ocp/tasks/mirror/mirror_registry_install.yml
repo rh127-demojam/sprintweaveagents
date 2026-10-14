@@ -1,0 +1,225 @@
+---
+# Install Quay mirror-registry on bastion for disconnected OCP installs.
+#
+# Disconnected mode: expects mirror-registry.tar.gz pre-staged at one of:
+#   - /tmp/mirror-registry.tar.gz
+#   - ~/ocp-install/mirror-registry.tar.gz
+#   - Path specified in ocp_mirror_registry_tarball
+#
+# Connected mode: downloads from Red Hat if not found locally.
+
+- name: Check if mirror-registry is already running
+  ansible.builtin.command:
+    cmd: podman ps --filter name=quay-app --format "{{ '{{' }}.Names{{ '}}' }}"
+  register: ocp_quay_running
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+- name: Mirror registry already running
+  ansible.builtin.debug:
+    msg: "Quay mirror-registry is already running on {{ ocp_quay_hostname | default('bastion') }}. Skipping install."
+  when: ocp_quay_running.stdout | default('') | length > 0
+
+- name: Install mirror-registry
+  when: ocp_quay_running.stdout | default('') | length == 0
+  block:
+    - name: Check for pre-staged mirror-registry tarball
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _mr_check
+      loop:
+        - "{{ ocp_mirror_registry_tarball | default('') }}"
+        - "{{ ocp_install_dir }}/mirror-registry-amd64.tar.gz"
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      when: item | length > 0
+
+    - name: Set mirror-registry tarball path
+      ansible.builtin.set_fact:
+        _mr_tarball: "{{ (_mr_check.results | selectattr('stat.exists', 'defined') | selectattr('stat.exists', 'equalto', true) | map(attribute='item') | first) | default('') }}"
+
+    - name: Check if CPAT has bundled mirror-registry
+      ansible.builtin.stat:
+        path: /app/mirror-artifacts/mirror-registry-amd64.tar.gz
+      register: _cpat_mr_bundled
+      delegate_to: localhost
+      when: _mr_tarball | length == 0
+
+    - name: Copy mirror-registry tarball from CPAT to bastion
+      ansible.builtin.copy:
+        src: /app/mirror-artifacts/mirror-registry-amd64.tar.gz
+        dest: "{{ ocp_install_dir }}/mirror-registry-amd64.tar.gz"
+        mode: "0644"
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      when:
+        - _mr_tarball | length == 0
+        - _cpat_mr_bundled.stat.exists | default(false)
+
+    - name: Set tarball path after CPAT copy
+      ansible.builtin.set_fact:
+        _mr_tarball: "{{ ocp_install_dir }}/mirror-registry-amd64.tar.gz"
+      when:
+        - _mr_tarball | length == 0
+        - _cpat_mr_bundled.stat.exists | default(false)
+
+    - name: Pre-staged tarball found
+      ansible.builtin.debug:
+        msg: "Using mirror-registry tarball: {{ _mr_tarball }}"
+      when: _mr_tarball | length > 0
+
+    - name: Download mirror-registry (connected environments only)
+      ansible.builtin.get_url:
+        url: "https://developers.redhat.com/content-gateway/rest/mirror/pub/openshift-v4/clients/mirror-registry/latest/mirror-registry.tar.gz"
+        dest: "/tmp/mirror-registry.tar.gz"
+        mode: "0644"
+        timeout: 60
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      when:
+        - _mr_tarball | length == 0
+        - not (ocp_is_disconnected | default(false) | bool)
+      register: _mr_download
+
+    - name: Set tarball path after download
+      ansible.builtin.set_fact:
+        _mr_tarball: "/tmp/mirror-registry.tar.gz"
+      when:
+        - _mr_tarball | length == 0
+        - _mr_download is defined
+        - _mr_download is not skipped
+        - _mr_download is not failed
+
+    - name: Fail if no tarball available (disconnected)
+      ansible.builtin.fail:
+        msg: |
+          mirror-registry tarball not found and cannot be downloaded (disconnected mode).
+          Pre-stage the tarball on the bastion at:
+            - {{ ocp_install_dir }}/mirror-registry-amd64.tar.gz
+          Or include it in CPAT build under binaries/mirror-registry-amd64.tar.gz
+          Download from: console.redhat.com/openshift/downloads → "Mirror Registry for Red Hat OpenShift"
+      when: _mr_tarball | length == 0
+
+    - name: Extract mirror-registry
+      ansible.builtin.unarchive:
+        src: "{{ _mr_tarball }}"
+        dest: "/tmp/"
+        remote_src: true
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Run mirror-registry install (async with log)
+      ansible.builtin.shell:
+        cmd: >-
+          /tmp/mirror-registry install
+          --quayHostname {{ ocp_quay_hostname }}
+          --quayRoot {{ ocp_quay_root_directory | default('/opt/quay') }}
+          {% if ocp_quay_init_password | default('') | length > 0 %}
+          --initPassword {{ ocp_quay_init_password }}
+          {% endif %}
+          -v > {{ ocp_install_dir }}/mirror-registry-install.log 2>&1
+      register: ocp_mirror_install_job
+      failed_when: false
+      async: 3600
+      poll: 0
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      become: true
+
+    - name: Wait for mirror-registry install to complete
+      ansible.builtin.async_status:
+        jid: "{{ ocp_mirror_install_job.ansible_job_id }}"
+      register: ocp_mirror_install_result
+      until: ocp_mirror_install_result.finished
+      retries: 120
+      delay: 30
+      failed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      become: true
+
+    - name: Fetch mirror-registry install log to CPAT
+      ansible.builtin.fetch:
+        src: "{{ ocp_install_dir }}/mirror-registry-install.log"
+        dest: "/cpat-data/logs/installations/{{ cpat_execution_uuid | default('unknown') }}-mirror-registry-install.log"
+        flat: true
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+      failed_when: false
+
+    - name: Display mirror-registry install output
+      ansible.builtin.debug:
+        msg: "{{ ocp_mirror_install_result.stdout_lines | default([]) + ['', 'rc=' + (ocp_mirror_install_result.rc | default('unknown') | string)] }}"
+
+    - name: Verify Quay is healthy (curl-based)
+      ansible.builtin.command:
+        cmd: >-
+          curl -sk -o /dev/null -w '%{http_code}'
+          https://{{ ocp_quay_hostname }}:8443/health/instance
+      register: _quay_health
+      retries: 15
+      delay: 20
+      until: _quay_health.stdout == '200'
+      changed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Fix Quay nginx for large blob uploads
+      ansible.builtin.shell:
+        cmd: |
+          podman exec quay-app sh -c "grep -q client_max_body_size /etc/nginx/nginx.conf || \
+            (sed -i '/http {/a\\    client_max_body_size 0;' /etc/nginx/nginx.conf && nginx -s reload 2>/dev/null || true)"
+      become: true
+      failed_when: false
+      changed_when: false
+      delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+      vars:
+        ansible_connection: ssh
+        ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+        ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    - name: Mirror registry install complete
+      ansible.builtin.debug:
+        msg: >-
+          Quay mirror-registry is healthy at https://{{ ocp_quay_hostname }}:8443.
+          Registry credentials — user: init, password: {{ ocp_quay_init_password | default('<auto-generated>') }}.
+          Root CA cert: {{ ocp_quay_root_directory | default('/opt/quay') }}/quay-rootCA/rootCA.pem

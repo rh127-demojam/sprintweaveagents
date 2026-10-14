@@ -1,0 +1,55 @@
+---
+# Generate ignition configs for UPI installations.
+# Runs on bastion where openshift-install binary is available.
+
+- name: Generate ignition manifests on bastion
+  ansible.builtin.command:
+    cmd: >-
+      {{ ocp_openshift_install_binary }}
+      --dir {{ ocp_install_dir }}
+      create manifests
+  register: ocp_manifests_result
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_upi | bool
+    - ocp_apply_manifests | bool
+
+- name: Generate ignition configs on bastion
+  ansible.builtin.command:
+    cmd: >-
+      {{ ocp_openshift_install_binary }}
+      --dir {{ ocp_install_dir }}
+      create ignition-configs
+  register: ocp_ignition_result
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when:
+    - ocp_is_upi | bool
+    - ocp_apply_manifests | bool
+
+- name: List generated ignition files on bastion
+  ansible.builtin.find:
+    paths: "{{ ocp_install_dir }}"
+    patterns: "*.ign"
+  register: ocp_ignition_files
+  delegate_to: "{{ hostvars[inventory_hostname]['ocp_bastion_ip'] | default(hostvars[inventory_hostname]['ocp_bastion_hostname'] | default('localhost')) }}"
+  vars:
+    ansible_connection: ssh
+    ansible_user: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_user'] | default('root') }}"
+    ansible_ssh_private_key_file: "{{ hostvars[inventory_hostname]['ocp_bastion_ssh_key_path'] | default(omit) }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+  when: ocp_is_upi | bool
+
+- name: Report generated ignition configs
+  ansible.builtin.debug:
+    msg: "Generated {{ ocp_ignition_files.files | default([]) | length }} ignition config files on bastion."
+  when: ocp_is_upi | bool

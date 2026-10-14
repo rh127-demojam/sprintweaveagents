@@ -1,0 +1,66 @@
+{# LSO — Local Storage Operator resources (v1.4)
+   Renders: Namespace + OperatorGroup + Subscription + LocalVolumeDiscovery + LocalVolumeSet
+   Source: JIO D0.6_LSO/ artifacts
+   Conditional: rendered when rhoso_lso_enabled is true #}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ rhoso_lso_namespace }}
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: local-storage-operator
+  namespace: {{ rhoso_lso_namespace }}
+spec:
+  targetNamespaces:
+    - {{ rhoso_lso_namespace }}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: local-storage-operator
+  namespace: {{ rhoso_lso_namespace }}
+spec:
+  name: local-storage-operator
+  channel: {{ rhoso_lso_channel | default('stable') }}
+  source: {{ rhoso_prereq_operator_source }}
+  sourceNamespace: {{ rhoso_prereq_operator_source_ns }}
+  installPlanApproval: {{ rhoso_prereq_install_plan_approval | default('Automatic') }}
+---
+apiVersion: local.storage.openshift.io/v1alpha1
+kind: LocalVolumeDiscovery
+metadata:
+  name: auto-discover-devices
+  namespace: {{ rhoso_lso_namespace }}
+spec:
+  nodeSelector:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: {{ rhoso_lso_node_selector_label }}
+            operator: Exists
+---
+apiVersion: local.storage.openshift.io/v1alpha1
+kind: LocalVolumeSet
+metadata:
+  name: local-volume-set
+  namespace: {{ rhoso_lso_namespace }}
+spec:
+  nodeSelector:
+    nodeSelectorTerms:
+      - matchExpressions:
+          - key: {{ rhoso_lso_node_selector_label }}
+            operator: Exists
+  storageClassName: {{ rhoso_lso_storage_class }}
+  volumeMode: {{ rhoso_lso_volume_mode | default('Block') }}
+  deviceInclusionSpec:
+    deviceTypes:
+{% for dtype in (rhoso_lso_device_types | default('disk')).split(',') %}
+      - {{ dtype | trim }}
+{% endfor %}
+    deviceMechanicalProperties:
+      - {{ rhoso_lso_device_mechanical | default('NonRotational') }}
+{% if (rhoso_lso_min_size | default('') | string) | length > 0 %}
+    minSize: {{ rhoso_lso_min_size }}
+{% endif %}
