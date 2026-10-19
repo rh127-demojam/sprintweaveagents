@@ -511,10 +511,18 @@ async def create_job(
 
 @app.get("/v1/jobs")
 def list_jobs() -> dict:
-    # Pick up any job.json written by other processes / recovered dirs
-    for jid, job in load_all_jobs().items():
+    # Sync with PVC: add new dirs, drop jobs deleted from disk (unless still running).
+    on_disk = load_all_jobs()
+    for jid, job in on_disk.items():
         if jid not in JOBS:
             JOBS[jid] = job
+    for jid in list(JOBS.keys()):
+        if jid in on_disk:
+            continue
+        status = str((JOBS.get(jid) or {}).get("status") or "")
+        if status in {"queued", "running", "awaiting_approval"}:
+            continue  # keep live jobs even if job.json briefly missing
+        JOBS.pop(jid, None)
     return {"jobs": [_public(job) for job in JOBS.values()]}
 
 
@@ -579,10 +587,12 @@ async def reject_job_endpoint(
 async def resume_job_endpoint(
     job_id: str,
     stage: str = Form("RDE"),
+    follow_up: str = Form(""),
 ) -> dict:
     """
     Resume from a stage (RDA/RDE/AUTO/…) using existing Docling parse + prior outputs.
     Skips Docling and earlier stages.
+    Optional follow_up prompt is injected into the resumed stage (like Cursor chat).
     """
     job = JOBS.get(job_id)
     if not job:
@@ -591,6 +601,9 @@ async def resume_job_endpoint(
             JOBS[job_id] = job
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
+    follow = (follow_up or "").strip()
+    if follow:
+        job["follow_up"] = follow
     try:
         resume_job_from_stage(job, DATA_DIR, stage_abbrev=stage or "RDE")
     except ValueError as exc:

@@ -15,6 +15,7 @@ BASTION_HOST="${BASTION_HOST:-lab-user@ssh.ocpv06.rhdp.net}"
 BASTION_PORT="${BASTION_PORT:-2222}"
 REMOTE_DIR="${REMOTE_DIR:-~/CFP_NEW}"
 TGZ="${TGZ:-/tmp/sprintweave-bastion.tgz}"
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15)
 
 echo "==> Packing from ${ROOT_DIR}"
 cd "${ROOT_DIR}"
@@ -42,10 +43,10 @@ tar -czf "${TGZ}" \
 ls -lh "${TGZ}"
 
 echo "==> SCP → ${BASTION_HOST} port ${BASTION_PORT}"
-scp -P "${BASTION_PORT}" "${TGZ}" "${BASTION_HOST}:~/"
+scp "${SSH_OPTS[@]}" -P "${BASTION_PORT}" "${TGZ}" "${BASTION_HOST}:~/"
 
 echo "==> Extracting on bastion…"
-ssh -p "${BASTION_PORT}" "${BASTION_HOST}" \
+ssh "${SSH_OPTS[@]}" -p "${BASTION_PORT}" "${BASTION_HOST}" \
   "mkdir -p ${REMOTE_DIR} && cd ${REMOTE_DIR} && tar -xzf ~/sprintweave-bastion.tgz && chmod +x bringup.sh 2>/dev/null || true"
 
 echo ""

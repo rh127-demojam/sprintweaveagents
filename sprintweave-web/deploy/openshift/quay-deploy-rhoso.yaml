@@ -58,7 +58,7 @@ data:
   SPRINTWEAVE_LAB_SINGLE_SHOT: "true"
   SPRINTWEAVE_RDA_SINGLE_SHOT: "true"
   SPRINTWEAVE_RDE_SINGLE_SHOT: "true"
-  SPRINTWEAVE_PIPELINES: "rhoso,ocp"
+  SPRINTWEAVE_PIPELINES: "rhoso,rhoso-delivery,ocp,ocp-delivery"
   # ── CPAT deploy: openshift | bringup | manifests ──
   SPRINTWEAVE_CPAT_DEPLOY_MODE: "openshift"
   SPRINTWEAVE_CPAT_NAMESPACE: "sprintweave"

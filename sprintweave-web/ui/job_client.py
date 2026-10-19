@@ -574,7 +574,7 @@ def reject_job(session_state: dict, job_id: str, reason: str = "") -> dict[str, 
 
 
 def cancel_job(session_state: dict, job_id: str) -> dict[str, Any]:
-    """Stop a running job (Cursor-like Stop)."""
+    """Stop a running job."""
     if using_api():
         response = requests.post(
             f"{API_URL}/v1/jobs/{job_id}/cancel",
@@ -604,12 +604,17 @@ def resume_job(
     session_state: dict,
     job_id: str,
     stage: str = "RDE",
+    follow_up: str = "",
 ) -> dict[str, Any]:
-    """Resume from a stage (default RDE) without re-running Docling/RDA."""
+    """Resume from a stage (default RDE) without re-running Docling/RDA.
+    Optional follow_up prompt is injected into the resumed stage."""
     if using_api():
+        data = {"stage": stage or "RDE"}
+        if follow_up:
+            data["follow_up"] = follow_up
         response = requests.post(
             f"{API_URL}/v1/jobs/{job_id}/resume",
-            data={"stage": stage or "RDE"},
+            data=data,
             timeout=30,
         )
         response.raise_for_status()

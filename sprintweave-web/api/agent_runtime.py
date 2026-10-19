@@ -639,13 +639,20 @@ def run_agent_loop(
     ``write_only``: only expose write_file/append_file/str_replace (ansible fill-in).
     """
     tools = WorkspaceTools(workspace)
-    if resume_existing:
-        out = workspace / "output"
-        if out.is_dir() and any(p.is_file() for p in out.rglob("*")):
+    # After Ansible (or any prior stage), output/ is never empty. The force-write
+    # nudge was built for cold Lab/RDA starts; firing it on Backend/Frontend
+    # pushes the model to rewrite unrelated paths (ciq-generators/lab-requirements).
+    out = workspace / "output"
+    existing_n = (
+        sum(1 for p in out.rglob("*") if p.is_file()) if out.is_dir() else 0
+    )
+    if resume_existing or existing_n > 0:
+        if existing_n > 0:
             tools.wrote_deliverable = True
+            why = "resume_existing" if resume_existing else "prior stage files"
             logs.append(
-                "[agent] resume_existing=true — force-write nudge suppressed "
-                "(output/ already has files)"
+                f"[agent] force-write nudge suppressed ({why}; "
+                f"output/ has {existing_n} file(s))"
             )
             if on_log:
                 on_log()

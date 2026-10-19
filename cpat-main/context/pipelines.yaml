@@ -76,12 +76,14 @@ custom:
         validators: [python_syntax, yaml_lint]
         layer: backend
         tool_loop: true
+        gate: true
       - abbrev: RDE-2
         agent: "RHOSO Deployment Engineer"
         sub_stage: "Backend"
         generates: ["output/cpat/backend/"]
         validators: [python_syntax, python_imports]
         layer: backend
+        gate: true
       - abbrev: RDE-3
         agent: "RHOSO Deployment Engineer"
         sub_stage: "Frontend"
@@ -89,6 +91,7 @@ custom:
         validators: [frontend_jsx]
         layer: frontend
         tool_loop: true
+        gate: true
         golden_templates:
           - { src: "context/templates/nrho-cpat-frontend/public/redhat-logo.svg", dest: "output/cpat/frontend/public/redhat-logo.svg" }
           - { src: "context/templates/nrho-cpat-frontend/public/redhat-logo-sidebar.svg", dest: "output/cpat/frontend/public/redhat-logo-sidebar.svg" }
@@ -98,11 +101,13 @@ custom:
         generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh", "output/cpat/USAGE.md"]
         validators: [dockerfile, entrypoint_sh, nginx_conf]
         layer: docker
+        gate: true
       - abbrev: RDE-5
         agent: "RHOSO Deployment Engineer"
         sub_stage: "AAP"
         generates: ["output/cpat/aap/exports/rhoso-job-templates.yml", "output/cpat/aap/exports/rhoso-workflow-templates.yml"]
         validators: [yaml_lint]
+        gate: true
 
   # ==================================================================
   # RHOSO DA only
@@ -137,12 +142,14 @@ custom:
         validators: [python_syntax, yaml_lint]
         layer: backend
         tool_loop: true
+        gate: true
       - abbrev: RDE-2
         agent: "RHOSO Deployment Engineer"
         sub_stage: "Backend"
         generates: ["output/cpat/backend/"]
         validators: [python_syntax, python_imports]
         layer: backend
+        gate: true
       - abbrev: RDE-3
         agent: "RHOSO Deployment Engineer"
         sub_stage: "Frontend"
@@ -150,6 +157,7 @@ custom:
         validators: [frontend_jsx]
         layer: frontend
         tool_loop: true
+        gate: true
         golden_templates:
           - { src: "context/templates/nrho-cpat-frontend/public/redhat-logo.svg", dest: "output/cpat/frontend/public/redhat-logo.svg" }
           - { src: "context/templates/nrho-cpat-frontend/public/redhat-logo-sidebar.svg", dest: "output/cpat/frontend/public/redhat-logo-sidebar.svg" }
@@ -159,11 +167,13 @@ custom:
         generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh"]
         validators: [dockerfile, entrypoint_sh, nginx_conf]
         layer: docker
+        gate: true
       - abbrev: RDE-5
         agent: "RHOSO Deployment Engineer"
         sub_stage: "AAP"
         generates: ["output/cpat/aap/exports/rhoso-job-templates.yml", "output/cpat/aap/exports/rhoso-workflow-templates.yml"]
         validators: [yaml_lint]
+        gate: true
 
   # ==================================================================
   # OCP Delivery — full pipeline (DA + DE)
@@ -189,12 +199,14 @@ custom:
         validators: [python_syntax, yaml_lint]
         layer: backend
         tool_loop: true
+        gate: true
       - abbrev: ODE-2
         agent: "OCP Deployment Engineer"
         sub_stage: "Backend"
         generates: ["output/cpat/backend/app.py", "output/cpat/backend/ansible_runner.py", "output/cpat/backend/ciq_parser.py", "output/cpat/backend/ocp_ciq_schema.py", "output/cpat/backend/models.py"]
         validators: [python_syntax, python_imports]
         layer: backend
+        gate: true
       - abbrev: ODE-3
         agent: "OCP Deployment Engineer"
         sub_stage: "Frontend"
@@ -202,17 +214,20 @@ custom:
         validators: [frontend_jsx]
         layer: frontend
         tool_loop: true
+        gate: true
       - abbrev: ODE-4
         agent: "OCP Deployment Engineer"
         sub_stage: "Docker"
         generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh", "output/cpat/USAGE.md", "output/cpat/binaries/README.md", "output/cpat/README-OCP.md"]
         validators: [dockerfile, entrypoint_sh, nginx_conf]
         layer: docker
+        gate: true
       - abbrev: ODE-5
         agent: "OCP Deployment Engineer"
         sub_stage: "AAP"
         generates: ["output/cpat/aap/execution-environment/", "output/cpat/aap/exports/credential-types.yml", "output/cpat/aap/exports/ocp-job-templates.yml", "output/cpat/aap/exports/ocp-workflow-templates.yml", "output/cpat/aap/exports/all-objects.yml", "output/cpat/aap/README.md"]
         validators: [yaml_lint]
+        gate: true
 
   # ==================================================================
   # OCP DA only
@@ -247,12 +262,14 @@ custom:
         validators: [python_syntax, yaml_lint]
         layer: backend
         tool_loop: true
+        gate: true
       - abbrev: ODE-2
         agent: "OCP Deployment Engineer"
         sub_stage: "Backend"
         generates: ["output/cpat/backend/app.py", "output/cpat/backend/ansible_runner.py", "output/cpat/backend/ciq_parser.py", "output/cpat/backend/ocp_ciq_schema.py", "output/cpat/backend/models.py"]
         validators: [python_syntax, python_imports]
         layer: backend
+        gate: true
       - abbrev: ODE-3
         agent: "OCP Deployment Engineer"
         sub_stage: "Frontend"
@@ -260,17 +277,20 @@ custom:
         validators: [frontend_jsx]
         layer: frontend
         tool_loop: true
+        gate: true
       - abbrev: ODE-4
         agent: "OCP Deployment Engineer"
         sub_stage: "Docker"
         generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh", "output/cpat/binaries/README.md", "output/cpat/README-OCP.md"]
         validators: [dockerfile, entrypoint_sh, nginx_conf]
         layer: docker
+        gate: true
       - abbrev: ODE-5
         agent: "OCP Deployment Engineer"
         sub_stage: "AAP"
         generates: ["output/cpat/aap/execution-environment/", "output/cpat/aap/exports/credential-types.yml", "output/cpat/aap/exports/ocp-job-templates.yml", "output/cpat/aap/exports/ocp-workflow-templates.yml", "output/cpat/aap/exports/all-objects.yml", "output/cpat/aap/README.md"]
         validators: [yaml_lint]
+        gate: true
 
   # ==================================================================
   # Full Delivery (RHOSO + OCP combined)
@@ -291,30 +311,32 @@ custom:
       - { abbrev: RDA-2, agent: "RHOSO DA", sub_stage: "Generator", generates: ["output/ciq-generators/generate_rhoso_ciq_workbooks.py"], validators: [python_syntax], layer: backend }
       - { abbrev: RDA-3, agent: "RHOSO DA", sub_stage: "Workbooks", generates: ["output/ciq-workbooks/rhoso/"] }
       # RHOSO DE
-      - { abbrev: RDE-1, agent: "RHOSO Deployment Engineer", sub_stage: "Ansible",  generates: ["output/cpat/ansible/playbooks/roles/rhoso/"], validators: [python_syntax, yaml_lint], layer: backend, tool_loop: true }
-      - { abbrev: RDE-2, agent: "RHOSO Deployment Engineer", sub_stage: "Backend",  generates: ["output/cpat/backend/"], validators: [python_syntax, python_imports], layer: backend }
-      - { abbrev: RDE-3, agent: "RHOSO Deployment Engineer", sub_stage: "Frontend", generates: ["output/cpat/frontend/"], validators: [frontend_jsx], layer: frontend, tool_loop: true }
+      - { abbrev: RDE-1, agent: "RHOSO Deployment Engineer", sub_stage: "Ansible",  generates: ["output/cpat/ansible/playbooks/roles/rhoso/"], validators: [python_syntax, yaml_lint], layer: backend, tool_loop: true, gate: true }
+      - { abbrev: RDE-2, agent: "RHOSO Deployment Engineer", sub_stage: "Backend",  generates: ["output/cpat/backend/"], validators: [python_syntax, python_imports], layer: backend, gate: true }
+      - { abbrev: RDE-3, agent: "RHOSO Deployment Engineer", sub_stage: "Frontend", generates: ["output/cpat/frontend/"], validators: [frontend_jsx], layer: frontend, tool_loop: true, gate: true }
       - abbrev: RDE-4
         agent: "RHOSO Deployment Engineer"
         sub_stage: "Docker"
         generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh"]
         validators: [dockerfile, entrypoint_sh, nginx_conf]
         layer: docker
-      - { abbrev: RDE-5, agent: "RHOSO Deployment Engineer", sub_stage: "AAP", generates: ["output/cpat/aap/exports/rhoso-job-templates.yml", "output/cpat/aap/exports/rhoso-workflow-templates.yml"], validators: [yaml_lint] }
+        gate: true
+      - { abbrev: RDE-5, agent: "RHOSO Deployment Engineer", sub_stage: "AAP", generates: ["output/cpat/aap/exports/rhoso-job-templates.yml", "output/cpat/aap/exports/rhoso-workflow-templates.yml"], validators: [yaml_lint], gate: true }
       # OCP DA
       - { abbrev: ODA-1, agent: "OCP DA", sub_stage: "Schema",    generates: ["output/ciq-generators/ocp_ciq_schema.py"], validators: [python_syntax], layer: backend }
       - { abbrev: ODA-2, agent: "OCP DA", sub_stage: "Generator", generates: ["output/ciq-generators/generate_ocp_ciq_workbooks.py"], validators: [python_syntax], layer: backend }
       - { abbrev: ODA-3, agent: "OCP DA", sub_stage: "Workbooks", generates: ["output/ciq-workbooks/ocp/"] }
       # OCP DE
-      - { abbrev: ODE-1, agent: "OCP Deployment Engineer", sub_stage: "Ansible",  generates: ["output/cpat/ansible/playbooks/roles/ocp/", "output/cpat/ansible/playbooks/ocp_install.yml", "output/cpat/ansible/playbooks/ocp_validate.yml"], validators: [python_syntax, yaml_lint], layer: backend, tool_loop: true }
-      - { abbrev: ODE-2, agent: "OCP Deployment Engineer", sub_stage: "Backend",  generates: ["output/cpat/backend/app.py", "output/cpat/backend/ansible_runner.py", "output/cpat/backend/ciq_parser.py", "output/cpat/backend/ocp_ciq_schema.py", "output/cpat/backend/models.py"], validators: [python_syntax, python_imports], layer: backend }
-      - { abbrev: ODE-3, agent: "OCP Deployment Engineer", sub_stage: "Frontend", generates: ["output/cpat/frontend/src/components/OcpInstallation.jsx", "output/cpat/frontend/src/api.js", "output/cpat/frontend/src/ocpInputFiles.js"], validators: [frontend_jsx], layer: frontend, tool_loop: true }
+      - { abbrev: ODE-1, agent: "OCP Deployment Engineer", sub_stage: "Ansible",  generates: ["output/cpat/ansible/playbooks/roles/ocp/", "output/cpat/ansible/playbooks/ocp_install.yml", "output/cpat/ansible/playbooks/ocp_validate.yml"], validators: [python_syntax, yaml_lint], layer: backend, tool_loop: true, gate: true }
+      - { abbrev: ODE-2, agent: "OCP Deployment Engineer", sub_stage: "Backend",  generates: ["output/cpat/backend/app.py", "output/cpat/backend/ansible_runner.py", "output/cpat/backend/ciq_parser.py", "output/cpat/backend/ocp_ciq_schema.py", "output/cpat/backend/models.py"], validators: [python_syntax, python_imports], layer: backend, gate: true }
+      - { abbrev: ODE-3, agent: "OCP Deployment Engineer", sub_stage: "Frontend", generates: ["output/cpat/frontend/src/components/OcpInstallation.jsx", "output/cpat/frontend/src/api.js", "output/cpat/frontend/src/ocpInputFiles.js"], validators: [frontend_jsx], layer: frontend, tool_loop: true, gate: true }
       - abbrev: ODE-4
         agent: "OCP Deployment Engineer"
         sub_stage: "Docker"
         generates: ["output/cpat/Dockerfile", "output/cpat/docker/", "output/cpat/bringup.sh", "output/cpat/binaries/README.md", "output/cpat/README-OCP.md"]
         validators: [dockerfile, entrypoint_sh, nginx_conf]
         layer: docker
-      - { abbrev: ODE-5, agent: "OCP Deployment Engineer", sub_stage: "AAP", generates: ["output/cpat/aap/execution-environment/", "output/cpat/aap/exports/credential-types.yml", "output/cpat/aap/exports/ocp-job-templates.yml", "output/cpat/aap/exports/ocp-workflow-templates.yml", "output/cpat/aap/exports/all-objects.yml", "output/cpat/aap/README.md"], validators: [yaml_lint] }
+        gate: true
+      - { abbrev: ODE-5, agent: "OCP Deployment Engineer", sub_stage: "AAP", generates: ["output/cpat/aap/execution-environment/", "output/cpat/aap/exports/credential-types.yml", "output/cpat/aap/exports/ocp-job-templates.yml", "output/cpat/aap/exports/ocp-workflow-templates.yml", "output/cpat/aap/exports/all-objects.yml", "output/cpat/aap/README.md"], validators: [yaml_lint], gate: true }
 
 deleted_builtin: []

@@ -1,5 +1,11 @@
+# Build from CFP_NEW (parent of sprintweave-web and sprintweave-agents):
+#   podman build -f sprintweave-web/Dockerfile.bundle -t quay.io/<org>/sprintweave:latest .
+
+.git
 **/__pycache__
 **/*.pyc
-.git
-*.md
-deploy
+**/node_modules
+**/.venv
+sprintweave-agents/.git
+sprintweave-web/docs/*.docx
+sprintweave-web/docs/generate_team_guide_docx.py

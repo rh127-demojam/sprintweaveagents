@@ -43,7 +43,7 @@ ALL_PIPELINES = [
         "command": (
             "Run Lab Requirements pipeline on @input — produce lab sizing workbook. "
             "Read ONLY parsed/*.md (Docling already ran). Do NOT pip install or open PDFs. "
-            "Build output/lab-requirements/generate_lab_requirements_workbook.py like Cursor: "
+            "Build output/lab-requirements/generate_lab_requirements_workbook.py: "
             "short write_file skeleton, then append_file/str_replace hunks, then one run_python. "
             "Do not rewrite the whole file repeatedly."
         ),
@@ -82,6 +82,66 @@ ALL_PIPELINES = [
             {"abbrev": "AUTO", "agent": "Automation Engineer", "output": "Playbook (if requested)", "optional": True},
             {"abbrev": "QA", "agent": "QA Architect", "output": "Deployment tests (if requested)", "optional": True},
             {"abbrev": "DOC", "agent": "Technical Writer", "output": "Admin / user guides (if requested)", "optional": True},
+        ],
+    },
+    {
+        "id": "rhoso-delivery",
+        "name": "RHOSO Delivery",
+        "blurb": "RDA schema→generator→workbooks, then RDE Ansible→Backend→Frontend→Docker→AAP (gated)",
+        "command": "Run RHOSO delivery pipeline on @cpat",
+        "stages": [
+            {"abbrev": "RDA-1", "agent": "RHOSO DA", "sub_stage": "Schema", "output": "CIQ schema (Python)", "gate": True},
+            {"abbrev": "RDA-2", "agent": "RHOSO DA", "sub_stage": "Generator", "output": "Workbook generator", "gate": True},
+            {"abbrev": "RDA-3", "agent": "RHOSO DA", "sub_stage": "Workbooks", "output": "CIQ Excel workbooks", "gate": True},
+            {"abbrev": "RDE-1", "agent": "RHOSO Deployment Engineer", "sub_stage": "Ansible", "output": "Ansible roles & templates", "tool_loop": True, "gate": True},
+            {"abbrev": "RDE-2", "agent": "RHOSO Deployment Engineer", "sub_stage": "Backend", "output": "Flask API backend", "gate": True},
+            {"abbrev": "RDE-3", "agent": "RHOSO Deployment Engineer", "sub_stage": "Frontend", "output": "React UI", "tool_loop": True, "gate": True},
+            {"abbrev": "RDE-4", "agent": "RHOSO Deployment Engineer", "sub_stage": "Docker", "output": "Dockerfile & bringup", "gate": True},
+            {"abbrev": "RDE-5", "agent": "RHOSO Deployment Engineer", "sub_stage": "AAP", "output": "AAP job/workflow exports", "gate": True},
+        ],
+    },
+    {
+        "id": "ocp",
+        "name": "OCP",
+        "blurb": "OCP CIQ + CPAT install pipeline (ODE Ansible/Backend/Frontend/Docker/AAP)",
+        "command": (
+            "Run OCP delivery pipeline on @cpat. "
+            "Full document content is in the prompt — write deliverables immediately. "
+            "Edit files in hunks (append_file/str_replace), not full rewrites. "
+            "FORBIDDEN: run_python(code=...) to read parsed files."
+        ),
+        "stages": [
+            {
+                "abbrev": "ODA",
+                "agent": "OCP DA",
+                "output": "OCP CIQ schema, generators, workbooks",
+                "gate": True,
+            },
+            {
+                "abbrev": "ODE",
+                "agent": "OCP Deployment Engineer",
+                "output": "Ansible + Backend + Frontend + Docker + AAP",
+                "gate": True,
+            },
+            {"abbrev": "AUTO", "agent": "Automation Engineer", "output": "Playbook (if requested)", "optional": True},
+            {"abbrev": "QA", "agent": "QA Architect", "output": "Install tests (if requested)", "optional": True},
+            {"abbrev": "DOC", "agent": "Technical Writer", "output": "Admin / user guides (if requested)", "optional": True},
+        ],
+    },
+    {
+        "id": "ocp-delivery",
+        "name": "OCP Delivery",
+        "blurb": "ODA schema→generator→workbooks, then ODE Ansible→Backend→Frontend→Docker→AAP (gated)",
+        "command": "Run OCP delivery pipeline on @cpat",
+        "stages": [
+            {"abbrev": "ODA-1", "agent": "OCP DA", "sub_stage": "Schema", "output": "OCP CIQ schema", "gate": True},
+            {"abbrev": "ODA-2", "agent": "OCP DA", "sub_stage": "Generator", "output": "OCP workbook generator", "gate": True},
+            {"abbrev": "ODA-3", "agent": "OCP DA", "sub_stage": "Workbooks", "output": "OCP CIQ workbooks", "gate": True},
+            {"abbrev": "ODE-1", "agent": "OCP Deployment Engineer", "sub_stage": "Ansible", "output": "OCP Ansible roles", "tool_loop": True, "gate": True},
+            {"abbrev": "ODE-2", "agent": "OCP Deployment Engineer", "sub_stage": "Backend", "output": "Flask OCP API", "gate": True},
+            {"abbrev": "ODE-3", "agent": "OCP Deployment Engineer", "sub_stage": "Frontend", "output": "OCP React UI", "tool_loop": True, "gate": True},
+            {"abbrev": "ODE-4", "agent": "OCP Deployment Engineer", "sub_stage": "Docker", "output": "Dockerfile & bringup", "gate": True},
+            {"abbrev": "ODE-5", "agent": "OCP Deployment Engineer", "sub_stage": "AAP", "output": "OCP AAP exports", "gate": True},
         ],
     },
     {
@@ -234,7 +294,7 @@ def get_pipeline(pipeline_id: str) -> dict:
 
 
 def default_command(pipeline: dict, input_id: str = "") -> str:
-    """Cursor-style run prompt (statement + @ refs), like colleague dashboard commands."""
+    """Default run prompt (statement + @ refs)."""
     base = (pipeline.get("command") or f"Run {pipeline.get('name', 'pipeline')} on @input").strip()
     iid = (input_id or "").strip()
     if not iid:

@@ -204,10 +204,61 @@ PIPELINE_ICONS = {
     "standard": "📋",
     "lab-requirements": "🔬",
     "rhoso": "🏗️",
+    "rhoso-delivery": "📦",
+    "ocp": "☸️",
+    "ocp-delivery": "🚀",
     "nrho": "🌐",
     "nrho-delivery": "📦",
     "governance": "🛡️",
 }
+
+# What each sub-stage does (shown on Home / Run / Job)
+STAGE_ROLE_BY_SUB = {
+    "Schema": "CIQ schema (Python)",
+    "Generator": "Workbook generator",
+    "Workbooks": "CIQ Excel workbooks",
+    "Ansible": "Ansible roles & templates",
+    "Backend": "Flask API backend",
+    "Frontend": "React UI",
+    "Docker": "Dockerfile & bringup",
+    "AAP": "AAP job / workflow exports",
+}
+STAGE_ROLE_BY_ABBREV = {
+    "RDA-1": "CIQ schema",
+    "RDA-2": "Workbook generator",
+    "RDA-3": "CIQ workbooks",
+    "RDE-1": "Ansible",
+    "RDE-2": "Backend",
+    "RDE-3": "Frontend",
+    "RDE-4": "Docker",
+    "RDE-5": "AAP",
+    "ODA-1": "OCP CIQ schema",
+    "ODA-2": "OCP workbook generator",
+    "ODA-3": "OCP CIQ workbooks",
+    "ODE-1": "OCP Ansible",
+    "ODE-2": "OCP Backend",
+    "ODE-3": "OCP Frontend",
+    "ODE-4": "OCP Docker",
+    "ODE-5": "OCP AAP",
+    "RDA": "Design Architect",
+    "RDE": "Deployment Engineer (all layers)",
+    "ODA": "OCP Design Architect",
+    "ODE": "OCP Deployment Engineer (all layers)",
+}
+
+
+def stage_role_label(stage: dict) -> str:
+    """Short description of what this stage generates."""
+    sub = str(stage.get("sub_stage") or "").strip()
+    ab = str(stage.get("abbrev") or "").strip().upper()
+    out = str(stage.get("output") or "").strip()
+    if sub and sub in STAGE_ROLE_BY_SUB:
+        return STAGE_ROLE_BY_SUB[sub]
+    if ab in STAGE_ROLE_BY_ABBREV:
+        return STAGE_ROLE_BY_ABBREV[ab]
+    if out:
+        return out[:48]
+    return stage.get("agent") or ""
 
 
 def status_html(status: str) -> str:
@@ -248,10 +299,12 @@ def _job_clock(job: dict) -> str:
 
 
 def _timing_for(job: dict, abbrev: str) -> dict:
+    """Latest timing entry for this abbrev (resume may create multiples)."""
+    match = {}
     for item in job.get("stage_timings") or []:
         if item.get("abbrev") == abbrev:
-            return item
-    return {}
+            match = item
+    return match
 
 
 def _completed_log_lines(logs: list[str]) -> list[str]:
@@ -296,13 +349,17 @@ def page_home() -> None:
         icon = "✨" if pipeline.get("custom") else PIPELINE_ICONS.get(pipeline["id"], "⚡")
         with cols[i % 2]:
             agents = sorted({s["agent"] for s in pipeline["stages"]})
-            badges = "".join(f'<span class="badge">{s["abbrev"]}</span>' for s in pipeline["stages"])
-            agent_badges = "".join(f'<span class="badge badge-agent">{a}</span>' for a in agents)
+            badges = "".join(
+                f'<span class="badge">{html.escape(s.get("abbrev", ""))}'
+                f'{(" · " + html.escape(stage_role_label(s))) if stage_role_label(s) else ""}</span>'
+                for s in pipeline["stages"]
+            )
+            agent_badges = "".join(f'<span class="badge badge-agent">{html.escape(a)}</span>' for a in agents)
             custom_tag = '<span class="badge badge-agent">custom</span>' if pipeline.get("custom") else ""
             st.markdown(f"""
             <div class="sw-card">
-                <h3>{icon} {pipeline['name']} {custom_tag}</h3>
-                <div class="desc">{pipeline['blurb']}</div>
+                <h3>{icon} {html.escape(pipeline['name'])} {custom_tag}</h3>
+                <div class="desc">{html.escape(pipeline.get('blurb') or '')}</div>
                 <div style="margin-bottom:8px">{badges}</div>
                 <div>{agent_badges}</div>
             </div>
@@ -393,10 +450,10 @@ def page_agents() -> None:
             placeholder='Leave empty for a single stage using the defaults above.',
         )
 
-        st.markdown("**Output verification (optional, Cursor parity)**")
+        st.markdown("**Output verification (optional)**")
         st.caption(
             "JSON list of relative paths that MUST exist after the agent finishes. "
-            "If missing → automatic repair pass (like Cursor validate+fix)."
+            "If missing, an automatic repair pass runs."
         )
         verify_paths_raw = st.text_area(
             "verify_paths",
@@ -573,29 +630,19 @@ def page_run() -> None:
     st.markdown("---")
 
     # Stage preview
-    st.markdown("**Pipeline stages:** *(stages marked 🛂 pause for approval)*")
+    st.markdown("**Pipeline stages:** *(🛂 = pauses for approval)*")
     stage_cols = st.columns(min(len(pipeline["stages"]), 6))
     for j, stage in enumerate(pipeline["stages"]):
         with stage_cols[j % len(stage_cols)]:
             gate_label = "🛂 gate" if stage.get("gate") else ""
-            if "tool_loop" in stage or stage.get("mode"):
-                mode_lbl = (
-                    "🔧 tool_loop"
-                    if stage.get("tool_loop", stage.get("mode") == "tool_loop")
-                    else "📄 single_shot"
-                )
-            else:
-                mode_lbl = ""
+            role = stage_role_label(stage)
             border = "#d29922" if stage.get("gate") else "#30363d"
-            vp_count = len(stage.get("verify_paths") or [])
-            verify_lbl = f"✅ {vp_count} verify" if vp_count else ""
             st.markdown(f"""
             <div style="background:#161b22; border:1px solid {border}; border-radius:8px;
-                        padding:12px; text-align:center; min-height:90px">
-                <div style="color:#58a6ff; font-weight:600; font-size:1.1rem">{stage['abbrev']}</div>
-                <div style="color:#8b949e; font-size:0.8rem; margin-top:4px">{stage['agent']}</div>
-                <div style="color:#8b949e; font-size:0.7rem; margin-top:4px">{mode_lbl}</div>
-                <div style="color:#3fb950; font-size:0.7rem; margin-top:2px">{verify_lbl}</div>
+                        padding:12px; text-align:center; min-height:100px">
+                <div style="color:#58a6ff; font-weight:600; font-size:1.05rem">{html.escape(stage.get('abbrev',''))}</div>
+                <div style="color:#e6edf3; font-size:0.8rem; font-weight:600; margin-top:6px">{html.escape(role)}</div>
+                <div style="color:#8b949e; font-size:0.7rem; margin-top:4px">{html.escape(stage.get('agent',''))}</div>
                 <div style="color:#d29922; font-size:0.75rem; margin-top:6px">{gate_label}</div>
             </div>
             """, unsafe_allow_html=True)
@@ -662,11 +709,10 @@ def page_run() -> None:
         elif input_id.strip() in existing_ids:
             st.success(f"Will reuse input set `{input_id.strip()}` (no re-upload).")
 
-    # Cursor-style prompt: statement + @ mentions (like dashboard "Run … on @cpat")
-    st.markdown("**Prompt** *(Cursor-style)*")
+    st.markdown("**Prompt**")
     st.caption(
-        "Same idea as Cursor chat: a natural-language command plus `@` references. "
-        "`@cpat` = generate under `output/cpat/`, `@input` = your uploaded docs, "
+        "Natural-language command with `@` references. "
+        "`@cpat` = generate under `output/cpat/`, `@input` = uploaded docs, "
         "`@context` = templates/glossary, `@filename` = a specific input file."
     )
 
@@ -708,7 +754,7 @@ def page_run() -> None:
             st.rerun()
 
     instructions = st.text_area(
-        "Cursor prompt",
+        "Run prompt",
         height=120,
         key=prompt_key,
         placeholder=suggested,
@@ -808,28 +854,47 @@ def page_job() -> None:
     prog_cols = st.columns(max(len(stages), 1))
     for i, stage in enumerate(stages):
         with prog_cols[i] if i < len(prog_cols) else prog_cols[-1]:
-            if status == "awaiting_approval" and gate_idx is not None and i == int(gate_idx):
+            timing = _timing_for(job, stage.get("abbrev", ""))
+            finished = bool(timing.get("finished_at") or timing.get("duration"))
+            at_gate = (
+                status == "awaiting_approval"
+                and gate_idx is not None
+                and i == int(gate_idx)
+            )
+            if at_gate:
                 icon, cls = "🛂", "stage-gate"
-            elif i < current:
+            elif i < current or (finished and i <= current and status != "running"):
                 icon, cls = "✅", "stage-done"
             elif i == current and status == "running":
                 icon, cls = "⏳", "stage-running"
+            elif finished:
+                icon, cls = "✅", "stage-done"
             else:
                 icon, cls = "⬜", "stage-pending"
-            gate_mark = " · gate" if stage.get("gate") else ""
-            timing = _timing_for(job, stage.get("abbrev", ""))
+            gate_mark = " 🛂" if stage.get("gate") else ""
             dur = timing.get("duration") or ""
-            if not dur and timing.get("started_at") and status == "running" and i == current:
+            if at_gate and not dur:
+                dur = "review"
+            elif (
+                not dur
+                and timing.get("started_at")
+                and status == "running"
+                and i == current
+            ):
                 dur = "in progress"
-            time_line = f'<div style="color:#8b949e; font-size:0.65rem">{dur or "—"}</div>'
-            st.markdown(f"""
-            <div style="text-align:center">
-                <div style="font-size:1.5rem">{icon}</div>
-                <div class="{cls}" style="font-size:0.85rem; font-weight:600">{stage.get('abbrev', '')}</div>
-                <div style="color:#484f58; font-size:0.7rem">{stage.get('agent', '')}{gate_mark}</div>
-                {time_line}
-            </div>
-            """, unsafe_allow_html=True)
+            abbrev = stage.get("abbrev", "")
+            role = stage_role_label(stage)
+            st.markdown(
+                f"<div style='text-align:center'>"
+                f"<div style='font-size:1.4rem'>{icon}</div>"
+                f"<div class='{cls}' style='font-size:0.8rem;font-weight:600'>"
+                f"{html.escape(abbrev)}{gate_mark}</div>"
+                f"<div style='color:#e6edf3;font-size:0.65rem;font-weight:500'>"
+                f"{html.escape(role)}</div>"
+                f"<div style='color:#8b949e;font-size:0.6rem'>{html.escape(dur or '—')}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     # Progress bar
     total = len(stages)
@@ -841,9 +906,12 @@ def page_job() -> None:
     if status == "awaiting_approval":
         st.markdown("---")
         abbrev = job.get("gate_abbrev") or "?"
+        gate_stage = next((s for s in stages if s.get("abbrev") == abbrev), {})
+        gate_role = stage_role_label(gate_stage) if gate_stage else ""
+        role_bit = f" ({gate_role})" if gate_role else ""
         st.warning(
-            f"**Gate: {abbrev}** — review output, optionally add a follow-up prompt "
-            "(like Cursor chat), then approve or reject.",
+            f"**Gate: {abbrev}{role_bit}** — review output, optionally add a "
+            "follow-up prompt, then approve or reject.",
             icon="🛂",
         )
         pending = job.get("pending_artifact") or ""
@@ -884,7 +952,7 @@ def page_job() -> None:
             ),
             height=120,
             key=f"gate-followup-{job['id']}-{abbrev}",
-            help="Sent to the next agent only — like an extra Cursor message before continuing.",
+            help="Sent to the next agent only — extra instructions before continuing.",
         )
         reason = st.text_input(
             "Reject reason (optional)",
@@ -945,7 +1013,7 @@ def page_job() -> None:
             else:
                 st.rerun()
 
-    # Stop (Cursor-like) while queued / running
+    # Stop while queued / running
     if status in {"queued", "running"}:
         stopping = bool(job.get("cancel_requested"))
         st.markdown("---")
@@ -963,7 +1031,7 @@ def page_job() -> None:
                 type="primary",
                 use_container_width=True,
                 key=f"stop-{job['id']}",
-                help="Like Cursor Stop — halts after the current LLM/tool step",
+                help="Halts after the current LLM/tool step",
             ):
                 try:
                     cancel_job(st.session_state, job["id"])
@@ -979,8 +1047,7 @@ def page_job() -> None:
                 )
             else:
                 st.caption(
-                    "Stop the agent like Cursor Stop. Cannot abort an in-flight LLM HTTP call; "
-                    "halts before the next step."
+                    "Stops before the next step. An in-flight LLM HTTP call cannot be aborted."
                 )
 
     # Completed work so far (visible while current stage is still running)
@@ -995,8 +1062,8 @@ def page_job() -> None:
     st.markdown("---")
     st.markdown("**Generated artifacts**")
     st.caption(
-        "RHOSO DA/RDE use a tool-calling agent loop (like Cursor): real files under "
-        "`output/` (CIQ generators, Excel, CPAT). Not a full IDE — gates/follow-up only for mid-run chat. "
+        "Generated files appear under `output/` (CIQ generators, Excel, CPAT). "
+        "Use gates and follow-up prompts to review or fix between stages. "
         "Runs can take a long time and use many tokens."
     )
     try:
@@ -1101,36 +1168,53 @@ def page_job() -> None:
     # Per-agent Skip / Resume controls (when job is not actively running)
     if status in {"rejected", "failed", "cancelled", "succeeded", "awaiting_approval"}:
         st.markdown("---")
-        st.markdown("**Agent controls**")
+        st.markdown("**🔄 Resume from stage**")
         st.caption(
-            "Resume re-runs from that agent (skips Docling + earlier stages). "
-            "Skip is available at a gate (see buttons above)."
+            "Re-run from a specific stage (e.g. RDE-3 Frontend). Earlier stages are kept. "
+            "Optional follow-up prompt tells the model what to fix."
+        )
+        resume_follow_up = st.text_area(
+            "💬 Follow-up prompt for resumed stage (optional)",
+            placeholder=(
+                "e.g. Create missing RhosoInstallation.jsx. "
+                "Layout must use setClusters(res.data) for bare-array /api/clusters."
+            ),
+            key=f"resume-followup-{job['id']}",
+            height=80,
         )
         if stages:
-            btn_cols = st.columns(min(len(stages), 6))
-            for i, stage in enumerate(stages):
-                ab = stage.get("abbrev", f"S{i}")
-                with btn_cols[i % len(btn_cols)]:
-                    disabled = status == "awaiting_approval"
-                    label = f"▶️ Resume {ab}"
-                    if st.button(
-                        label,
-                        key=f"resume-{ab}-{job['id']}",
-                        use_container_width=True,
-                        disabled=disabled,
-                        help=(
-                            f"Start from {ab} ({stage.get('agent', '')}). "
-                            "Requires parsed PDFs; earlier stage output if not first."
-                            if not disabled
-                            else "Reject or Stop first, then Resume"
-                        ),
-                    ):
-                        try:
-                            resume_job(st.session_state, job["id"], stage=ab)
-                            st.success(f"Resumed from {ab}")
-                            st.rerun()
-                        except (requests.RequestException, ValueError, RuntimeError) as exc:
-                            st.error(f"Resume {ab} failed: {exc}")
+            chunk_size = 5
+            for row_start in range(0, len(stages), chunk_size):
+                row_stages = stages[row_start : row_start + chunk_size]
+                btn_cols = st.columns(len(row_stages))
+                for j, stage in enumerate(row_stages):
+                    ab = stage.get("abbrev", f"S{row_start + j}")
+                    role = stage_role_label(stage)
+                    with btn_cols[j]:
+                        disabled = status == "awaiting_approval"
+                        gate_icon = "🛂" if stage.get("gate") else ""
+                        if st.button(
+                            f"▶️ {ab}",
+                            key=f"resume-{ab}-{job['id']}",
+                            use_container_width=True,
+                            disabled=disabled,
+                            help=(
+                                f"Resume {ab} — {role} ({stage.get('agent', '')}). "
+                                "Earlier output is preserved."
+                                if not disabled
+                                else "Reject or Stop first, then Resume"
+                            ),
+                        ):
+                            try:
+                                resume_job(st.session_state, job["id"], stage=ab, follow_up=resume_follow_up)
+                                st.success(
+                                    f"Resumed from {ab} ({role})"
+                                    + (" with follow-up" if resume_follow_up else "")
+                                )
+                                st.rerun()
+                            except (requests.RequestException, ValueError, RuntimeError) as exc:
+                                st.error(f"Resume {ab} failed: {exc}")
+                        st.caption(f"{role} {gate_icon}".strip())
             if status == "awaiting_approval":
                 st.caption(
                     "At a gate: use **Skip** above, or Reject/Stop first then use Resume."

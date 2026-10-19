@@ -135,6 +135,30 @@ def _find_deploy_spec(pipeline_id: str, stage_abbrev: str) -> dict:
     return dict(stage.get("deploy_spec") or {})
 
 
+def _filter_de_sub_stages(all_subs: list[dict], stage: dict) -> list[dict]:
+    """
+    If the pipeline stage is a single sub-stage (RDE-3 / ODE-1 / sub_stage=Frontend),
+    run only that pass. Monolithic RDE/ODE stages still run the full list.
+    """
+    want_abbrev = str(stage.get("abbrev") or "").strip().upper()
+    want_name = str(stage.get("sub_stage") or "").strip()
+    # Whole-agent stage (legacy rhoso / ocp pipeline)
+    if want_abbrev in {"RDE", "ODE"} and not want_name:
+        return list(all_subs)
+    if not want_name and "-" not in want_abbrev:
+        return list(all_subs)
+
+    matched: list[dict] = []
+    for sub in all_subs:
+        sab = str(sub.get("abbrev") or "").strip().upper()
+        sname = str(sub.get("name") or "").strip()
+        if want_abbrev and sab == want_abbrev:
+            matched.append(sub)
+        elif want_name and sname.lower() == want_name.lower():
+            matched.append(sub)
+    return matched if matched else list(all_subs)
+
+
 # ── Validator Registry ──────────────────────────────────────────
 # Generic validators. Pipeline config names them; worker.py runs them.
 # Each validator takes a Path and returns list[str] of error messages.
@@ -2127,193 +2151,235 @@ def _rda_cpat_contract() -> str:
     )
 
 
+def _strip_md_fence(text: str) -> str:
+    code = (text or "").strip()
+    if code.startswith("```"):
+        code = code[code.index("\n") + 1 :] if "\n" in code else code[3:]
+    if code.endswith("```"):
+        code = code[:-3].rstrip()
+    return code
+
+
 def _run_rda_single_shot(
     workspace: Path,
     sources: str,
     logs: list[str],
     flush_logs: callable,
     should_cancel: callable,
+    sub_stage: str = "",
 ) -> str:
     """
-    RHOSO DA single-shot: TWO LLM calls.
-    Call 1 → CIQ schema (rhoso_ciq_schema.py)
-    Call 2 → Workbook generator (generate_rhoso_ciq_workbooks.py)
-    Then run the generator + write a pipeline report.
-    Cost: ~2 calls (~$0.50–0.80) instead of ~15–20 tool-loop calls (~$5).
+    RHOSO DA single-shot, optionally scoped to one sub-stage:
+      Schema → CIQ schema only (RDA-1)
+      Generator → workbook generator only (RDA-2)
+      Workbooks → run generator → .xlsx + report (RDA-3)
+      (empty) → full Schema + Generator + Workbooks (legacy single RDA)
     """
     tools = WorkspaceTools(workspace)
     cpat_contract = _rda_cpat_contract()
-
-    # --- Call 1: CIQ schema ---
-    logs.append("[rda-single-shot] generating CIQ schema in one call (CPAT v1.4 contract)")
+    # Normalize: "Schema", "RDA-1", "schema" → schema | generator | workbooks | ""
+    raw = (sub_stage or "").strip().lower().replace("_", "-")
+    _map = {
+        "schema": "schema",
+        "rda-1": "schema",
+        "generator": "generator",
+        "rda-2": "generator",
+        "workbooks": "workbooks",
+        "workbook": "workbooks",
+        "rda-3": "workbooks",
+    }
+    want = _map.get(raw, raw if raw in {"schema", "generator", "workbooks"} else "")
+    do_schema = want in {"", "schema"}
+    do_generator = want in {"", "generator"}
+    do_workbooks = want in {"", "workbooks"}
+    # Scoped stages must NOT run the other phases
+    if want == "schema":
+        do_generator = do_workbooks = False
+    elif want == "generator":
+        do_schema = do_workbooks = False
+    elif want == "workbooks":
+        do_schema = do_generator = False
+    schema_path = "output/ciq-generators/rhoso_ciq_schema.py"
+    gen_path = "output/ciq-generators/generate_rhoso_ciq_workbooks.py"
+    logs.append(f"[rda-single-shot] mode={want or 'full'} (sub_stage={sub_stage!r})")
     flush_logs()
 
-    if should_cancel and should_cancel():
-        return "cancelled"
+    code = ""
+    result = ""
 
-    schema_system = (
-        "You are the RHOSO DA (Design Architect) for CPAT.\n"
-        "Write a COMPLETE Python module rhoso_ciq_schema.py.\n"
-        "Output ONLY the Python code — no explanations, no markdown fences.\n"
-        "Required exports:\n"
-        "- SCHEMA_VERSION = \"1.4\"\n"
-        "- CIQ_TYPES (validators / type map used by CPAT)\n"
-        "- RHOSO_PARAMETER_SCHEMA (list of dicts with table=rhoso_* names)\n"
-        "- RHOSO_NETWORK_FIELD_SCHEMA\n"
-        "- RHOSO_NODE_FIELD_SCHEMA\n"
-        "- get_validation_schema()\n"
-        f"\n{cpat_contract}\n"
-    )
-    schema_text = complete(
-        schema_system,
-        "Build the CPAT v1.4 CIQ schema. Documents below are supporting context only.\n\n"
-        f"DOCUMENT:\n{sources[:30000]}\n",
-    )
-
-    code = schema_text.strip()
-    if code.startswith("```"):
-        code = code[code.index("\n") + 1:] if "\n" in code else code[3:]
-    if code.endswith("```"):
-        code = code[:-3].rstrip()
-
-    # Soft gate: reject obvious storage-PDF drift and regenerate once
-    drifted = (
-        'SCHEMA_VERSION = "18.' in code
-        or 'SCHEMA_VERSION: str = "18.' in code
-        or "storage_general" in code
-        or "block_storage_api" in code
-        or "rhoso_details" not in code
-    )
-    if drifted:
-        logs.append(
-            "[rda-single-shot] schema drifted from CPAT v1.4 — regenerating with stricter prompt"
-        )
+    if do_schema:
+        logs.append("[rda-single-shot] generating CIQ schema in one call (CPAT v1.4 contract)")
         flush_logs()
         if should_cancel and should_cancel():
             return "cancelled"
-        retry_system = (
-            schema_system
-            + "\nPREVIOUS OUTPUT WAS REJECTED because it used storage-PDF categories "
-            "or SCHEMA_VERSION != 1.4.\n"
-            "Regenerate with rhoso_details / rhoso_access / ... tables ONLY.\n"
+
+        schema_system = (
+            "You are the RHOSO DA (Design Architect) for CPAT.\n"
+            "Write a COMPLETE Python module rhoso_ciq_schema.py.\n"
+            "Output ONLY the Python code — no explanations, no markdown fences.\n"
+            "Required exports:\n"
+            "- SCHEMA_VERSION = \"1.4\"\n"
+            "- CIQ_TYPES (validators / type map used by CPAT)\n"
+            "- RHOSO_PARAMETER_SCHEMA (list of dicts with table=rhoso_* names)\n"
+            "- RHOSO_NETWORK_FIELD_SCHEMA\n"
+            "- RHOSO_NODE_FIELD_SCHEMA\n"
+            "- get_validation_schema()\n"
+            f"\n{cpat_contract}\n"
         )
         schema_text = complete(
-            retry_system,
-            "CPAT v1.4 schema ONLY. Supporting docs:\n" + sources[:20000],
+            schema_system,
+            "Build the CPAT v1.4 CIQ schema. Documents below are supporting context only.\n\n"
+            f"DOCUMENT:\n{sources[:30000]}\n",
         )
-    code = schema_text.strip()
-    if code.startswith("```"):
-        code = code[code.index("\n") + 1:] if "\n" in code else code[3:]
-    if code.endswith("```"):
-        code = code[:-3].rstrip()
+        code = _strip_md_fence(schema_text)
+        drifted = (
+            'SCHEMA_VERSION = "18.' in code
+            or 'SCHEMA_VERSION: str = "18.' in code
+            or "storage_general" in code
+            or "block_storage_api" in code
+            or "rhoso_details" not in code
+        )
+        if drifted:
+            logs.append(
+                "[rda-single-shot] schema drifted from CPAT v1.4 — regenerating with stricter prompt"
+            )
+            flush_logs()
+            if should_cancel and should_cancel():
+                return "cancelled"
+            retry_system = (
+                schema_system
+                + "\nPREVIOUS OUTPUT WAS REJECTED because it used storage-PDF categories "
+                "or SCHEMA_VERSION != 1.4.\n"
+                "Regenerate with rhoso_details / rhoso_access / ... tables ONLY.\n"
+            )
+            schema_text = complete(
+                retry_system,
+                "CPAT v1.4 schema ONLY. Supporting docs:\n" + sources[:20000],
+            )
+            code = _strip_md_fence(schema_text)
 
-    tools.write_file("output/ciq-generators/rhoso_ciq_schema.py", code)
-    logs.append("[rda-single-shot] wrote CIQ schema")
-    flush_logs()
-
-    # --- Call 2: Workbook generator ---
-    if should_cancel and should_cancel():
-        return "cancelled"
-
-    logs.append("[rda-single-shot] generating workbook generator in one call")
-    flush_logs()
-
-    gen_system = (
-        "You are a Python developer writing the CPAT CIQ workbook generator.\n"
-        "Output ONLY the Python script — no explanations, no markdown fences.\n"
-        "The script must:\n"
-        "- import openpyxl, os, and symbols from rhoso_ciq_schema\n"
-        "- Create EXACTLY these sheets (CPAT multi-sheet layout):\n"
-        "  Versioning, Environment, Storage, Control Plane, Networks, Data Plane, "
-        "values (hidden), Guidelines, Operators\n"
-        "- Group tables: Environment=rhoso_details/access/disconnected; "
-        "Storage=rhoso_storage/ceph/trident/lso/cinder/multipath; "
-        "Control Plane=rhoso_control_plane/services/observability/pv_sizing/neutron; "
-        "Networks=rhoso_networks; Data Plane=rhoso_edpm_network_config/data_plane + nodes\n"
-        "- Create sample-rhoso.ciq.xlsx AND rhoso-ciq-template.xlsx\n"
-        "- Save under output/ciq-workbooks/rhoso/\n"
-        "- Print confirmation on success\n"
-        "Do NOT create one sheet per storage_general/block_storage category.\n"
-    )
-    gen_user = (
-        f"CIQ SCHEMA:\n{code[:15000]}\n\n"
-        f"DOCUMENT EXCERPT (for sample values only):\n{sources[:10000]}\n"
-    )
-    gen_text = complete(gen_system, gen_user)
-
-    gen_code = gen_text.strip()
-    if gen_code.startswith("```"):
-        gen_code = gen_code[gen_code.index("\n") + 1:] if "\n" in gen_code else gen_code[3:]
-    if gen_code.endswith("```"):
-        gen_code = gen_code[:-3].rstrip()
-
-    tools.write_file("output/ciq-generators/generate_rhoso_ciq_workbooks.py", gen_code)
-    tools.write_file("output/ciq-generators/requirements.txt", "openpyxl\n")
-    logs.append("[rda-single-shot] wrote workbook generator + requirements.txt")
-    flush_logs()
-
-    # --- Run the generator (with one auto-fix retry on syntax/truncation errors) ---
-    if should_cancel and should_cancel():
-        return "cancelled"
-
-    result = tools.run_python(script_path="output/ciq-generators/generate_rhoso_ciq_workbooks.py")
-    first_line = result.splitlines()[0][:120] if result else "(no output)"
-    logs.append(f"[rda-single-shot] run_python: {first_line}")
-
-    if "exit=0" not in result and ("SyntaxError" in result or "truncat" in result.lower()):
-        logs.append("[rda-single-shot] syntax/truncation error — regenerating shorter generator")
+        tools.write_file(schema_path, code)
+        logs.append("[rda-single-shot] wrote CIQ schema")
         flush_logs()
+        if want == "schema":
+            return f"RDA-1 Schema complete.\n- `{schema_path}`\n"
+
+    if do_generator:
         if should_cancel and should_cancel():
             return "cancelled"
-        # Retry with a simpler prompt that produces a shorter script
-        gen_system_retry = (
-            "You are a Python developer. The previous script was truncated. "
-            "Write a SHORTER, COMPLETE openpyxl script that creates ONE RHOSO CIQ "
-            "workbook (.xlsx). Keep it under 120 lines. No markdown fences.\n"
-            "- import openpyxl, os\n"
-            "- One sheet per CIQ category (use simple loops)\n"
-            "- Save to output/ciq-workbooks/rhoso/sample-rhoso.ciq.xlsx\n"
-            "- Print confirmation\n"
+        if not code:
+            sp = workspace / schema_path
+            if not sp.is_file():
+                raise RuntimeError(
+                    f"RDA-2 Generator requires {schema_path} (finish RDA-1 Schema first)"
+                )
+            code = sp.read_text(encoding="utf-8", errors="replace")
+
+        logs.append("[rda-single-shot] generating workbook generator in one call")
+        flush_logs()
+        gen_system = (
+            "You are a Python developer writing the CPAT CIQ workbook generator.\n"
+            "Output ONLY the Python script — no explanations, no markdown fences.\n"
+            "The script must:\n"
+            "- import openpyxl, os, and symbols from rhoso_ciq_schema\n"
+            "- Create EXACTLY these sheets (CPAT multi-sheet layout):\n"
+            "  Versioning, Environment, Storage, Control Plane, Networks, Data Plane, "
+            "values (hidden), Guidelines, Operators\n"
+            "- Group tables: Environment=rhoso_details/access/disconnected; "
+            "Storage=rhoso_storage/ceph/trident/lso/cinder/multipath; "
+            "Control Plane=rhoso_control_plane/services/observability/pv_sizing/neutron; "
+            "Networks=rhoso_networks; Data Plane=rhoso_edpm_network_config/data_plane + nodes\n"
+            "- Create sample-rhoso.ciq.xlsx AND rhoso-ciq-template.xlsx\n"
+            "- Save under output/ciq-workbooks/rhoso/\n"
+            "- Print confirmation on success\n"
+            "Do NOT create one sheet per storage_general/block_storage category.\n"
         )
-        gen_text_retry = complete(gen_system_retry, f"CIQ SCHEMA:\n{code[:12000]}\n")
-        retry_code = gen_text_retry.strip()
-        if retry_code.startswith("```"):
-            retry_code = retry_code[retry_code.index("\n") + 1:] if "\n" in retry_code else retry_code[3:]
-        if retry_code.endswith("```"):
-            retry_code = retry_code[:-3].rstrip()
-        # Reset write count so we can overwrite
-        tools._write_counts.pop("output/ciq-generators/generate_rhoso_ciq_workbooks.py", None)
-        tools.write_file("output/ciq-generators/generate_rhoso_ciq_workbooks.py", retry_code)
-        result = tools.run_python(script_path="output/ciq-generators/generate_rhoso_ciq_workbooks.py")
+        gen_text = complete(
+            gen_system,
+            f"CIQ SCHEMA:\n{code[:15000]}\n\n"
+            f"DOCUMENT EXCERPT (for sample values only):\n{sources[:10000]}\n",
+        )
+        gen_code = _strip_md_fence(gen_text)
+        tools.write_file(gen_path, gen_code)
+        tools.write_file("output/ciq-generators/requirements.txt", "openpyxl\n")
+        logs.append("[rda-single-shot] wrote workbook generator + requirements.txt")
+        flush_logs()
+        if want == "generator":
+            return (
+                "RDA-2 Generator complete.\n"
+                f"- `{gen_path}`\n"
+                "- `output/ciq-generators/requirements.txt`\n"
+            )
+
+    if do_workbooks:
+        if should_cancel and should_cancel():
+            return "cancelled"
+        if not (workspace / gen_path).is_file():
+            raise RuntimeError(
+                f"RDA-3 Workbooks requires {gen_path} (finish RDA-2 Generator first)"
+            )
+        if not code:
+            sp = workspace / schema_path
+            if sp.is_file():
+                code = sp.read_text(encoding="utf-8", errors="replace")
+
+        result = tools.run_python(script_path=gen_path)
         first_line = result.splitlines()[0][:120] if result else "(no output)"
-        logs.append(f"[rda-single-shot] retry run_python: {first_line}")
+        logs.append(f"[rda-single-shot] run_python: {first_line}")
 
-    if "exit=0" in result:
-        logs.append("[rda-single-shot] success — .xlsx generated")
-    else:
-        logs.append("[rda-single-shot] generator error — may need tool-loop retry")
+        if "exit=0" not in result and ("SyntaxError" in result or "truncat" in result.lower()):
+            logs.append(
+                "[rda-single-shot] syntax/truncation error — regenerating shorter generator"
+            )
+            flush_logs()
+            if should_cancel and should_cancel():
+                return "cancelled"
+            gen_system_retry = (
+                "You are a Python developer. The previous script was truncated. "
+                "Write a SHORTER, COMPLETE openpyxl script that creates ONE RHOSO CIQ "
+                "workbook (.xlsx). Keep it under 120 lines. No markdown fences.\n"
+                "- import openpyxl, os\n"
+                "- One sheet per CIQ category (use simple loops)\n"
+                "- Save to output/ciq-workbooks/rhoso/sample-rhoso.ciq.xlsx\n"
+                "- Print confirmation\n"
+            )
+            retry_code = _strip_md_fence(
+                complete(gen_system_retry, f"CIQ SCHEMA:\n{code[:12000]}\n")
+            )
+            tools._write_counts.pop(gen_path, None)
+            tools.write_file(gen_path, retry_code)
+            result = tools.run_python(script_path=gen_path)
+            first_line = result.splitlines()[0][:120] if result else "(no output)"
+            logs.append(f"[rda-single-shot] retry run_python: {first_line}")
 
-    # --- Pipeline report ---
-    report_dir = workspace / "output" / "pipeline-reports" / "rda"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report = (
-        "# RDA — RHOSO DA Pipeline Report\n\n"
-        "## Generated Files\n\n"
-        "- `output/ciq-generators/rhoso_ciq_schema.py` — CIQ parameter schema\n"
-        "- `output/ciq-generators/generate_rhoso_ciq_workbooks.py` — Workbook generator\n"
-        "- `output/ciq-generators/requirements.txt`\n"
-        "- `output/ciq-workbooks/rhoso/*.xlsx` — Generated workbooks\n\n"
-        f"## Generator Output\n\n```\n{result[:3000]}\n```\n"
-    )
-    (report_dir / "rda-report.md").write_text(report, encoding="utf-8")
-    (report_dir / "ciq-parameter-reference.md").write_text(report, encoding="utf-8")
-    logs.append(
-        "[rda-single-shot] wrote pipeline-reports/rda/"
-        "rda-report.md + ciq-parameter-reference.md"
-    )
-    flush_logs()
+        if "exit=0" in result:
+            logs.append("[rda-single-shot] success — .xlsx generated")
+        else:
+            logs.append("[rda-single-shot] generator error — may need tool-loop retry")
 
-    return f"RDA single-shot completed.\n\nGenerator output:\n{result[:2000]}\n\n{report}"
+        report_dir = workspace / "output" / "pipeline-reports" / "rda"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report = (
+            "# RDA — RHOSO DA Pipeline Report\n\n"
+            "## Generated Files\n\n"
+            f"- `{schema_path}` — CIQ parameter schema\n"
+            f"- `{gen_path}` — Workbook generator\n"
+            "- `output/ciq-generators/requirements.txt`\n"
+            "- `output/ciq-workbooks/rhoso/*.xlsx` — Generated workbooks\n\n"
+            f"## Generator Output\n\n```\n{result[:3000]}\n```\n"
+        )
+        (report_dir / "rda-report.md").write_text(report, encoding="utf-8")
+        (report_dir / "ciq-parameter-reference.md").write_text(report, encoding="utf-8")
+        logs.append(
+            "[rda-single-shot] wrote pipeline-reports/rda/"
+            "rda-report.md + ciq-parameter-reference.md"
+        )
+        flush_logs()
+        if want == "workbooks":
+            return f"RDA-3 Workbooks complete.\n\nGenerator output:\n{result[:2000]}\n"
+        return f"RDA single-shot completed.\n\nGenerator output:\n{result[:2000]}\n\n{report}"
+
+    return f"RDA single-shot ({want or 'full'}) finished."
 
 
 def _parse_file_bundle(text: str) -> list[tuple[str, str]]:
@@ -3232,7 +3298,7 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
             if "tool_loop" in stage:
                 use_tools = bool(stage.get("tool_loop"))
             else:
-            use_tools = agent_name in TOOL_AGENTS
+                use_tools = agent_name in TOOL_AGENTS
             mode_label = "tool_loop" if use_tools else "single_shot"
             if stage.get("custom") or stage_rule:
                 logs.append(
@@ -3248,7 +3314,14 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
                 if agent_name == "RHOSO Deployment Engineer":
                     # RDE needs RDA output + prior cpat files — not raw PDFs.
                     rde_context = previous[:15000] if previous else "(none)"
-                    for sub in RDE_SUB_STAGES:
+                    rde_subs = _filter_de_sub_stages(RDE_SUB_STAGES, stage)
+                    if len(rde_subs) < len(RDE_SUB_STAGES):
+                        logs.append(
+                            f"[rde-pass] filtered to {[s.get('abbrev') for s in rde_subs]} "
+                            f"(stage={stage.get('abbrev')})"
+                        )
+                        flush_logs(logs)
+                    for sub in rde_subs:
                         if cancelled():
                             _mark_cancelled(
                                 job, logs, workspace=workspace, output_dir=output_dir
@@ -3259,7 +3332,7 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
                         golden = sub.get("golden_templates") or []
                         if golden:
                             _seed_golden_templates(workspace, golden, logs)
-                            flush_logs(logs)
+                        flush_logs(logs)
                         part = ""
                         used_single = False
                         force_tool_loop = sub.get("tool_loop", False)
@@ -3284,8 +3357,8 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
                             logs.append(
                                 f"[rde-pass] {sub['name']} — using Cursor-like tool loop "
                                 "(too many files for single-shot)"
-                                )
-                                flush_logs(logs)
+                            )
+                            flush_logs(logs)
                         if not used_single:
                             if force_tool_loop and sub.get("name") == "Ansible":
                                 # Until-complete: keep rounds until all required
@@ -3375,9 +3448,9 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
                                             f"({ANSIBLE_ROUND_STEPS} steps)"
                                         )
                                         flush_logs(logs)
-                            user = (
-                                f"Stage: {stage['abbrev']} {agent_name}\n"
-                                f"{sub['prompt']}\n"
+                                        user = (
+                                            f"Stage: {stage['abbrev']} {agent_name}\n"
+                                            f"{sub['prompt']}\n"
                                             f"Expected overall deliverables: "
                                             f"{stage.get('output', '')}\n"
                                             f"Input set id: "
@@ -3655,7 +3728,14 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
                 elif agent_name == "OCP Deployment Engineer":
                     # ODE needs ODA output + prior cpat files.
                     ode_context = previous[:15000] if previous else "(none)"
-                    for sub in ODE_SUB_STAGES:
+                    ode_subs = _filter_de_sub_stages(ODE_SUB_STAGES, stage)
+                    if len(ode_subs) < len(ODE_SUB_STAGES):
+                        logs.append(
+                            f"[ode-pass] filtered to {[s.get('abbrev') for s in ode_subs]} "
+                            f"(stage={stage.get('abbrev')})"
+                        )
+                        flush_logs(logs)
+                    for sub in ode_subs:
                         if cancelled():
                             _mark_cancelled(
                                 job, logs, workspace=workspace, output_dir=output_dir
@@ -3829,12 +3909,27 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
 
                     elif rda_is_rhoso and RDA_SINGLE_SHOT and not is_custom:
                         try:
+                            rda_sub = str(stage.get("sub_stage") or "").strip()
+                            if not rda_sub:
+                                # Fallback when older jobs only have abbrev RDA-1/2/3
+                                ab = str(stage.get("abbrev") or "").strip().upper()
+                                rda_sub = {
+                                    "RDA-1": "Schema",
+                                    "RDA-2": "Generator",
+                                    "RDA-3": "Workbooks",
+                                }.get(ab, "")
+                            logs.append(
+                                f"[rda-single-shot] stage={stage.get('abbrev')} "
+                                f"sub_stage={rda_sub or '(full)'}"
+                            )
+                            flush_logs(logs)
                             text = _run_rda_single_shot(
                                 workspace=workspace,
                                 sources=sources,
                                 logs=logs,
                                 flush_logs=lambda: flush_logs(logs),
                                 should_cancel=cancelled,
+                                sub_stage=rda_sub,
                             )
                             single_shot_ok = True
                         except Exception as ss_exc:
@@ -3896,19 +3991,42 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
                             )
                             source_block = f"FULL DOCUMENT CONTENT (use this, do not read files):\n{sources[:30000]}\n\n"
                         else:
-                            deliverable_block = (
-                                "RHOSO DA MODE:\n"
-                                "The FULL document content is provided below — minimize read_file/"
-                                "search_files calls. You already have the content.\n"
-                                "1) Write CIQ schema to output/ciq-generators/rhoso_ciq_schema.py.\n"
-                                "2) Write workbook generator to output/ciq-generators/"
-                                "generate_rhoso_ciq_workbooks.py + requirements.txt.\n"
-                                "3) run_python(script_path='output/ciq-generators/"
-                                "generate_rhoso_ciq_workbooks.py') once → .xlsx.\n"
-                                "4) Write pipeline report to output/pipeline-reports/rda/.\n"
-                                "Edit like Cursor: write_file skeleton → append_file/str_replace hunks.\n"
-                                "FORBIDDEN: run_python(code=...) to dump parsed/*.md.\n"
-                            )
+                            rda_sub = str(stage.get("sub_stage") or "").strip().lower()
+                            if rda_sub == "schema":
+                                deliverable_block = (
+                                    "RHOSO DA MODE — Schema ONLY (RDA-1):\n"
+                                    "Write output/ciq-generators/rhoso_ciq_schema.py and stop.\n"
+                                    "Do NOT write the workbook generator or run it.\n"
+                                    "FORBIDDEN: run_python(code=...) to dump parsed/*.md.\n"
+                                )
+                            elif rda_sub == "generator":
+                                deliverable_block = (
+                                    "RHOSO DA MODE — Generator ONLY (RDA-2):\n"
+                                    "Schema already exists at output/ciq-generators/rhoso_ciq_schema.py.\n"
+                                    "Write generate_rhoso_ciq_workbooks.py + requirements.txt only.\n"
+                                    "Do NOT run the generator yet (RDA-3 does that).\n"
+                                )
+                            elif rda_sub == "workbooks":
+                                deliverable_block = (
+                                    "RHOSO DA MODE — Workbooks ONLY (RDA-3):\n"
+                                    "Run generate_rhoso_ciq_workbooks.py once to produce .xlsx under "
+                                    "output/ciq-workbooks/rhoso/. Write a short report under "
+                                    "output/pipeline-reports/rda/.\n"
+                                )
+                            else:
+                                deliverable_block = (
+                                    "RHOSO DA MODE:\n"
+                                    "The FULL document content is provided below — minimize read_file/"
+                                    "search_files calls. You already have the content.\n"
+                                    "1) Write CIQ schema to output/ciq-generators/rhoso_ciq_schema.py.\n"
+                                    "2) Write workbook generator to output/ciq-generators/"
+                                    "generate_rhoso_ciq_workbooks.py + requirements.txt.\n"
+                                    "3) run_python(script_path='output/ciq-generators/"
+                                    "generate_rhoso_ciq_workbooks.py') once → .xlsx.\n"
+                                    "4) Write pipeline report to output/pipeline-reports/rda/.\n"
+                                    "Edit with write_file skeleton → append_file/str_replace hunks.\n"
+                                    "FORBIDDEN: run_python(code=...) to dump parsed/*.md.\n"
+                                )
                             source_block = f"FULL DOCUMENT CONTENT:\n{sources[:30000]}\n\n"
                         user = (
                             f"Stage: {stage['abbrev']} {agent_name}\n"
@@ -3934,10 +4052,25 @@ def run_job(job: dict, data_root: Path, start_index: int = 0) -> None:
                         )
                 _sync_workspace_output(workspace, output_dir)
                 files = _list_generated(workspace)
-                if agent_name == "RHOSO DA" and not _rda_soft_ok(workspace):
-                    logs.append(
-                        "[warn] RDA soft checks: missing schema/generator/xlsx/report under output/"
-                    )
+                if agent_name == "RHOSO DA":
+                    rda_sub = str(stage.get("sub_stage") or "").strip().lower()
+                    out = workspace / "output"
+                    if rda_sub == "schema":
+                        ok = any(out.rglob("*rhoso_ciq_schema.py"))
+                        if not ok:
+                            logs.append("[warn] RDA-1: missing rhoso_ciq_schema.py")
+                    elif rda_sub == "generator":
+                        ok = any(out.rglob("generate_rhoso_ciq_workbooks.py"))
+                        if not ok:
+                            logs.append("[warn] RDA-2: missing generate_rhoso_ciq_workbooks.py")
+                    elif rda_sub == "workbooks":
+                        ok = any(out.rglob("*.xlsx"))
+                        if not ok:
+                            logs.append("[warn] RDA-3: missing CIQ .xlsx under output/")
+                    elif not _rda_soft_ok(workspace):
+                        logs.append(
+                            "[warn] RDA soft checks: missing schema/generator/xlsx/report under output/"
+                        )
                 if agent_name == "RHOSO Deployment Engineer" and not _rde_soft_ok(workspace):
                     logs.append(
                         "[warn] RDE soft checks: missing output/cpat or rde reports"
