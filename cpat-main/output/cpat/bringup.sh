@@ -80,6 +80,7 @@ cleanup_build_images() {
 build_image() {
   echo "Building image '$FULL_IMAGE' (VERSION=$VERSION) with podman..."
   MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 podman build \
+    --tls-verify=false \
     --build-arg CACHEBUST="$(date +%s)" \
     --build-arg "CPAT_VERSION=$VERSION" \
     -t "$FULL_IMAGE" .

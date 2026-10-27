@@ -620,7 +620,7 @@ def read_cluster_artifact(name, file) -> tuple: ...
 APP_VERSION = os.environ.get("CPAT_VERSION", "25.7.4")
 ```
 
-### Pattern L: React Frontend
+### Pattern L: React Frontend (8+ components)
 
 **`App.jsx` — Router structure:**
 ```jsx

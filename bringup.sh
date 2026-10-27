@@ -77,7 +77,7 @@ build() {
   $RT build \
     -f Dockerfile \
     --build-arg "BASE_IMAGE=$DOCLING_IMAGE" \
-    --build-arg "PIPELINES=rhoso,ocp" \
+    --build-arg "PIPELINES=rhoso,rhoso-delivery,ocp,ocp-delivery" \
     -t "$FULL_IMAGE" \
     -t "$LATEST_IMAGE" \
     .

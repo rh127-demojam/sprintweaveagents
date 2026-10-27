@@ -221,7 +221,7 @@ STAGE_ROLE_BY_SUB = {
     "Backend": "Flask API backend",
     "Frontend": "React UI",
     "Docker": "Dockerfile & bringup",
-    "AAP": "AAP job / workflow exports",
+    "AAP": "AAP import/cleanup API scripts",
 }
 STAGE_ROLE_BY_ABBREV = {
     "RDA-1": "CIQ schema",

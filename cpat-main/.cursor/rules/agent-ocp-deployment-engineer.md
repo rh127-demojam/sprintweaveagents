@@ -1,5 +1,5 @@
 ---
-description: "Generate CPAT OCP source code — Ansible role (11 subdirs, 33 tasks, 12 Jinja templates, ~120 defaults), Flask backend (OCP routes, parser, schema copy, command-log API — no generator), React frontend (OCP UI), Docker packaging, AAP 2.5 integration (EE, Job Templates, Workflow Templates)"
+description: "Generate OCP source code — Ansible role (11 subdirs, 33 tasks, 12 Jinja templates, ~120 defaults), Flask backend (OCP routes, parser, schema copy, command-log API — no generator), React frontend (OCP UI), Docker packaging, AAP 2.5 integration (import-via-api.sh: 27 OCP JTs, 3 workflows with wired nodes)"
 alwaysApply: true
 ---
 # Agent: OCP Deployment Engineer (ODE)
@@ -35,9 +35,9 @@ Activate when the user asks to:
 | Backend Models | `output/cpat/backend/models.py` | `OcpInstallationExecution` model |
 | Frontend Components | `output/cpat/frontend/src/` | OCP deployment automation UI components |
 | Docker Updates | `output/cpat/` | Updated Dockerfile, USAGE.md, bringup.sh, binaries/README.md |
-| AAP EE Definition | `output/cpat/aap/execution-environment/` | `execution-environment.yml`, `requirements.yml`, `requirements.txt`, `bindep.txt` for ansible-builder |
-| AAP Exports | `output/cpat/aap/exports/` | `credential-types.yml` (3 types), `ocp-job-templates.yml` (2 OCP JTs with surveys), `ocp-workflow-templates.yml` (3 OCP WTs), `all-objects.yml` (unified import merging OCP + RHOSO) |
-| AAP README | `output/cpat/aap/README.md` | Setup guide: EE build, AAP prerequisites, import commands, credential creation, CIQ handling, usage |
+| AAP Import Script | `output/cpat/aap/import-via-api.sh` | REST API import script — creates all AAP objects (credential types, inventory, project, 47 JTs, surveys, workflows with wired nodes) |
+| AAP Cleanup Script | `output/cpat/aap/cleanup-via-api.sh` | REST API cleanup script — removes all AAP objects (dry-run by default) |
+| AAP README | `output/cpat/aap/README.md` | Setup guide: AAP URL discovery, SCM credential, import/cleanup, credential instances, CIQ handling, usage |
 
 > **NOTE:** No `ocp_ciq_generator.py` in backend — CIQ workbook generation is ODA-only at `output/ciq-generators/`.
 
@@ -51,7 +51,7 @@ When triggered by the pipeline, this agent runs in **sub-stages**:
 | ODE-2 | `Backend` | `output/cpat/backend/app.py`, `output/cpat/backend/ansible_runner.py`, `output/cpat/backend/ciq_parser.py`, `output/cpat/backend/ocp_ciq_schema.py`, `output/cpat/backend/models.py` | ODE-1 (reads Ansible task tags, CIQ schema) |
 | ODE-3 | `Frontend` | `output/cpat/frontend/src/components/OcpInstallation.jsx`, `output/cpat/frontend/src/components/OcpTaskProgress.jsx`, `output/cpat/frontend/src/components/ExecutionTable.jsx`, `output/cpat/frontend/src/components/InstallationLogModal.jsx`, `output/cpat/frontend/src/api.js`, `output/cpat/frontend/src/ocpInputFiles.js` | ODE-2 (reads backend routes, input file specs) |
 | ODE-4 | `Docker` | Updated `output/cpat/Dockerfile`, `output/cpat/bringup.sh`, `output/cpat/USAGE.md`, `output/cpat/binaries/README.md`, `output/cpat/README-OCP.md` | ODE-3 (packages all layers) |
-| ODE-5 | `AAP` | `output/cpat/aap/execution-environment/` (4 files), `output/cpat/aap/exports/credential-types.yml`, `output/cpat/aap/exports/ocp-job-templates.yml`, `output/cpat/aap/exports/ocp-workflow-templates.yml`, `output/cpat/aap/exports/all-objects.yml`, `output/cpat/aap/README.md` | ODE-2 (reads `OCP_INSTALLATION_TASK_TAGS` from `ansible_runner.py`) |
+| ODE-5 | `AAP` | `output/cpat/aap/import-via-api.sh` (creates 27 OCP JTs + surveys + 3 OCP workflows with wired nodes), `output/cpat/aap/cleanup-via-api.sh`, `output/cpat/aap/README.md` | ODE-2 (reads `OCP_INSTALLATION_TASK_TAGS` from `ansible_runner.py`) |
 
 When a `sub_stage` is specified, generate ONLY that stage's files.
 
@@ -129,19 +129,9 @@ roles/ocp/
 ### AAP Directory Layout (ODE-5 + RDE-5)
 ```
 output/cpat/aap/
-├── execution-environment/              # ODE-5 owns
-│   ├── execution-environment.yml       # ansible-builder v3 EE definition (base: ee-minimal-rhel9)
-│   ├── requirements.yml                # Galaxy collections (empty — ansible.builtin only)
-│   ├── requirements.txt                # Python: openpyxl==3.1.5
-│   └── bindep.txt                      # System: python3-devel, jq, openssh-clients
-├── exports/
-│   ├── all-objects.yml                 # ODE-5 owns — unified awx-manage import (merges OCP + RHOSO)
-│   ├── credential-types.yml            # ODE-5 owns — 3 custom types: Bastion SSH, BMC, Pull Secret
-│   ├── ocp-job-templates.yml           # ODE-5 owns — 2 OCP JTs (Install 26 tasks, Validate)
-│   ├── ocp-workflow-templates.yml      # ODE-5 owns — 3 OCP WTs (ABI, ABI-DC, Destroy)
-│   ├── rhoso-job-templates.yml         # RDE-5 owns — 2 RHOSO JTs (Install 19 tasks, Register)
-│   └── rhoso-workflow-templates.yml    # RDE-5 owns — 1 RHOSO WT (Full Install)
-└── README.md                           # ODE-5 owns — EE build + AAP setup + usage guide
+├── import-via-api.sh                   # ODE-5 owns — REST API import (creates all AAP objects)
+├── cleanup-via-api.sh                  # ODE-5 owns — REST API cleanup (removes all AAP objects)
+└── README.md                           # ODE-5 owns — setup + usage guide
 ```
 
 ### Task Table (by subdirectory — 33 task files across 11 subdirs)
@@ -428,38 +418,33 @@ Mirror artifacts (`mirror-registry-amd64.tar.gz`, `oc-mirror-rhel9-linux-amd64.t
 
 ### AAP 2.5 Integration (ODE-5)
 
-AAP deliverables enable running the SAME CPAT Ansible playbooks via Red Hat Ansible Automation Platform instead of the CPAT UI. Zero changes to the Ansible code.
+AAP deliverables enable running the SAME Ansible playbooks via Red Hat Ansible Automation Platform instead of the CPAT UI. Zero changes to the Ansible code. No custom Execution Environment needed — OCP binaries run on the bastion via `delegate_to`.
 
-**Execution Environment** — `ansible-builder` v3 definition based on `ee-minimal-rhel9:latest`:
-- Python: `openpyxl==3.1.5` (CIQ parsing)
-- System: `python3-devel`, `jq`, `openssh-clients`
-- Binaries: `oc` + `openshift-install` from `binaries/` via `additional_build_steps`
-- Custom modules loaded from project `library/` + `module_utils/` via `ansible.cfg`
+**Import method**: `import-via-api.sh` — a single bash script that creates ALL AAP objects via REST API. Requires only `curl` and `python3`. Auto-detects AAP Gateway (`/api/controller/v2/`) vs standalone (`/api/v2/`).
 
 **Custom Credential Types** (3):
-- `CPAT Bastion SSH` — injects SSH key as temp file + user as extra var (`ocp_bastion_ssh_user`, `ocp_bastion_ssh_key_path`)
-- `CPAT BMC Credentials` — injects `ocp_bmc_user`, `ocp_bmc_password` as extra vars
-- `CPAT Pull Secret` — injects pull secret JSON as temp file, path via `ocp_pull_secret_path`
+- `Bastion SSH` — injects SSH key as temp file + user as extra var (`ocp_bastion_ssh_user`, `ocp_bastion_ssh_key_path`)
+- `BMC Credentials` — injects `ocp_bmc_user`, `ocp_bmc_password` as extra vars
+- `Pull Secret` — injects pull secret JSON as temp file, path via `ocp_pull_secret_path`
 
-**OCP Job Templates** (2, ODE-5) — each with survey spec:
-- `CPAT OCP Install` → `ocp_install.yml`, survey: `ocp_task` dropdown (26 choices from `OCP_INSTALLATION_TASK_TAGS`)
-- `CPAT OCP Validate` → `ocp_validate.yml`
+**OCP Job Templates** (27 individual JTs, ODE-5) — one per UI task, each with the task pre-set in `extra_vars`:
+- 26 task templates: `OCP Prerequisites`, `OCP Generate Install Config`, `OCP Create Agent ISO`, etc. → `ocp_install.yml` with `extra_vars: {"ocp_task": "<task_tag>"}`
+- 1 validate template: `OCP Validate` → `ocp_validate.yml`
+- Each has a survey for CIQ path, cluster name, OCP version
 
-**OCP Workflow Templates** (3, ODE-5) — chain the same JT with different `extra_data` per node:
-- `CPAT OCP ABI Full Install` — 11 nodes: prerequisites → ... → node_readiness
-- `CPAT OCP ABI-DC Full Install` — 14 nodes: +3 mirror steps before install_config
-- `CPAT OCP Destroy` — 1 node: destroy_cluster
+**OCP Workflow Templates** (3, ODE-5) — chain individual JTs sequentially via on-success nodes:
+- `OCP ABI Full Install` — 15 nodes: Prerequisites → Install Config → ... → Node Readiness
+- `OCP ABI-DC Full Install` — 18 nodes: Prerequisites → Mirror Registry → ... → Node Readiness
+- `OCP Destroy` — 1 node: Destroy Cluster
 
-**RHOSO Job Templates** (2, RDE-5) — see [agent-rhoso-deployment-engineer.md](agent-rhoso-deployment-engineer.md):
-- `CPAT RHOSO Install` → `main.yml` with `--tags rhoso`, survey: `installation_task` dropdown (19 choices)
-- `CPAT RHOSO Register` → `main.yml` with `--tags register`
+**RHOSO Job Templates** (20 individual JTs, RDE-5) — one per UI task:
+- 19 task templates: `RHOSO Generate Manifests`, `RHOSO Pre-requisites`, etc. → `main.yml` with `extra_vars: {"installation_task": "<task_path>"}`
+- 1 register template: `RHOSO Register` → `main.yml --tags register`
 
 **RHOSO Workflow Templates** (1, RDE-5):
-- `CPAT RHOSO Full Install` — 19 nodes: manifest_generation → ... → observability
+- `RHOSO Full Install` — 19 nodes: Generate Manifests → ... → Observability Configuration
 
-**Survey choices MUST stay in sync** with `OCP_INSTALLATION_TASK_TAGS` in `ansible_runner.py` (ODE-5) and `RHOSO_INSTALLATION_TASK_TAGS` (RDE-5). When a new OCP task is added, update `ocp-job-templates.yml` + `ocp-workflow-templates.yml`. When a new RHOSO task is added, update `rhoso-job-templates.yml` + `rhoso-workflow-templates.yml`.
-
-**Import**: `awx-manage import < exports/all-objects.yml` (unified file) or individual files.
+**Adding a new task**: Add a `create_ocp_jt` / `create_rhoso_jt` call in `import-via-api.sh` (Section 3), add survey call (Section 4), add to `wire_workflow` (Section 7), and add to `cleanup-via-api.sh` arrays. Re-run: `bash import-via-api.sh`.
 
 ### Install Method Routing
 
@@ -503,6 +488,8 @@ The Ansible role MUST route tasks based on the `ocp_install_method` variable:
 - Boot nodes: query BMC power state BEFORE sending reset — `ForceRestart` on a stopped VM does nothing via sushy-tools
 - Bootstrap async: ABI and IPI/UPI tasks MUST register to DIFFERENT variables to avoid Ansible skip-clobber
 - Media eject: MUST eject virtual media after RHCOS disk-write 100% — sushy-tools ignores Hdd boot override
-- AAP survey choices MUST be exact values from `OCP_INSTALLATION_TASK_TAGS` — adding a new OCP task requires updating `ansible_runner.py` AND `aap/exports/ocp-job-templates.yml` + `ocp-workflow-templates.yml` + `all-objects.yml`
-- AAP workflow nodes use the SAME job template with different `extra_data` to override the task variable — never create separate JTs per task
+- AAP uses individual job templates per task (1:1 with UI checkboxes) — each JT has the task pre-set in `extra_vars`, no dropdown survey
+- Adding a new OCP task requires updating `import-via-api.sh` (create_ocp_jt + attach_ocp_survey + wire_workflow) AND `cleanup-via-api.sh` (OCP_JOB_TEMPLATES array)
+- AAP workflow nodes are wired sequentially via on-success chains by `import-via-api.sh` Section 7
 - AAP credential types inject secrets as temp files via `injectors.file` — never as plain extra vars
+- AAP resource names MUST NOT use "CPAT" prefix — use clean names (e.g. "OCP Prerequisites", "Bastion SSH", "Cloud Platform Automation")

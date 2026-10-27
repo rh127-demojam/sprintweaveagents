@@ -97,7 +97,7 @@ ALL_PIPELINES = [
             {"abbrev": "RDE-2", "agent": "RHOSO Deployment Engineer", "sub_stage": "Backend", "output": "Flask API backend", "gate": True},
             {"abbrev": "RDE-3", "agent": "RHOSO Deployment Engineer", "sub_stage": "Frontend", "output": "React UI", "tool_loop": True, "gate": True},
             {"abbrev": "RDE-4", "agent": "RHOSO Deployment Engineer", "sub_stage": "Docker", "output": "Dockerfile & bringup", "gate": True},
-            {"abbrev": "RDE-5", "agent": "RHOSO Deployment Engineer", "sub_stage": "AAP", "output": "AAP job/workflow exports", "gate": True},
+            {"abbrev": "RDE-5", "agent": "RHOSO Deployment Engineer", "sub_stage": "AAP", "output": "AAP import/cleanup scripts (RHOSO JTs)", "gate": True},
         ],
     },
     {
@@ -141,7 +141,7 @@ ALL_PIPELINES = [
             {"abbrev": "ODE-2", "agent": "OCP Deployment Engineer", "sub_stage": "Backend", "output": "Flask OCP API", "gate": True},
             {"abbrev": "ODE-3", "agent": "OCP Deployment Engineer", "sub_stage": "Frontend", "output": "OCP React UI", "tool_loop": True, "gate": True},
             {"abbrev": "ODE-4", "agent": "OCP Deployment Engineer", "sub_stage": "Docker", "output": "Dockerfile & bringup", "gate": True},
-            {"abbrev": "ODE-5", "agent": "OCP Deployment Engineer", "sub_stage": "AAP", "output": "OCP AAP exports", "gate": True},
+            {"abbrev": "ODE-5", "agent": "OCP Deployment Engineer", "sub_stage": "AAP", "output": "AAP import/cleanup scripts (OCP + shared)", "gate": True},
         ],
     },
     {

@@ -35,6 +35,30 @@ FORCE_WRITE_AFTER_STEP = max(
     0, int(os.environ.get("SPRINTWEAVE_AGENT_FORCE_WRITE_AFTER_STEP", "3"))
 )
 
+# Hard-block writes to known-wrong Ansible paths (flat tree outside roles/).
+# The model sometimes drifts after context compaction and invents these.
+_FORBIDDEN_PATH_PREFIXES = [
+    "output/cpat/ansible/tasks/",
+    "output/cpat/ansible/templates/",
+    "output/cpat/ansible/defaults/",
+]
+
+
+def _is_forbidden_path(rel: str) -> str | None:
+    """Return an error message if ``rel`` matches a forbidden prefix, else None."""
+    for prefix in _FORBIDDEN_PATH_PREFIXES:
+        if rel.startswith(prefix):
+            correct = rel.replace(
+                "output/cpat/ansible/", "output/cpat/ansible/playbooks/roles/rhoso/", 1
+            )
+            return (
+                f"BLOCKED: '{rel}' is a forbidden flat-tree path. "
+                f"Write to the role layout instead: '{correct}'. "
+                "All Ansible tasks/templates/defaults MUST go under "
+                "output/cpat/ansible/playbooks/roles/rhoso/."
+            )
+    return None
+
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -294,6 +318,9 @@ class WorkspaceTools:
     def write_file(self, path: str, content: str) -> str:
         target = self.resolve(path)
         rel = target.relative_to(self.root).as_posix()
+        blocked = _is_forbidden_path(rel)
+        if blocked:
+            return blocked
         if rel.startswith("output/"):
             self.wrote_deliverable = True
         count = self._write_counts.get(rel, 0) + 1
@@ -322,6 +349,9 @@ class WorkspaceTools:
     def append_file(self, path: str, content: str) -> str:
         target = self.resolve(path)
         rel = target.relative_to(self.root).as_posix()
+        blocked = _is_forbidden_path(rel)
+        if blocked:
+            return blocked
         if rel.startswith("output/"):
             self.wrote_deliverable = True
         target.parent.mkdir(parents=True, exist_ok=True)

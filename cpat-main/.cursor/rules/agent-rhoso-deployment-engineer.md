@@ -37,7 +37,7 @@ When triggered by a pipeline or user request, this agent MUST generate actual wo
 | Ansible Config | `output/cpat/ansible.cfg` | Ansible configuration |
 | Documentation | `output/cpat/USAGE.md` | Product documentation |
 | Reference Docs | `output/pipeline-reports/rde/*.md` | Workflow MoP, manifest catalog, commands, blueprint |
-| AAP Integration (RDE-5) | `output/cpat/aap/exports/rhoso-job-templates.yml`, `output/cpat/aap/exports/rhoso-workflow-templates.yml` | RHOSO Install job template (19 tasks survey), RHOSO Register job template, RHOSO Full Install workflow template |
+| AAP Integration (RDE-5) | `output/cpat/aap/import-via-api.sh` (RHOSO section) | 20 individual RHOSO job templates (19 tasks + 1 register), RHOSO Full Install workflow template with wired nodes |
 
 ## Multi-Pass Generation (sub-stages)
 
@@ -49,85 +49,9 @@ When triggered by the pipeline, this agent runs in **sub-stages** — one per ap
 | RDE-2 | `Backend` | `output/cpat/backend/` (app.py, models, parser, runner, paths, input_files, version, schema shim, requirements) | RDE-1 (reads `ansible/module_utils/rhoso_ciq_schema.py`) |
 | RDE-3 | `Frontend` | `output/cpat/frontend/` (11 components, api.js, styles, config, nginx, logos) | RDE-2 (matches API routes) |
 | RDE-4 | `Docker` | `output/cpat/Dockerfile`, `docker/entrypoint.sh`, `bringup.sh`, `.dockerignore`, `USAGE.md` | RDE-1 + RDE-2 + RDE-3 |
-| RDE-5 | `AAP` | `output/cpat/aap/exports/rhoso-job-templates.yml` (RHOSO Install 19 tasks + RHOSO Register), `output/cpat/aap/exports/rhoso-workflow-templates.yml` (RHOSO Full Install 19 nodes) | RDE-2 (reads task tags from `RHOSO_INSTALLATION_TASK_TAGS` in `ansible_runner.py`) |
+| RDE-5 | `AAP` | `output/cpat/aap/import-via-api.sh` (RHOSO section: 20 individual JTs with pre-set extra_vars + RHOSO Full Install workflow with 19 wired nodes), `output/cpat/aap/cleanup-via-api.sh` (RHOSO_JOB_TEMPLATES array) | RDE-2 (reads task tags from `RHOSO_INSTALLATION_TASK_TAGS` in `ansible_runner.py`) |
 
-> **Note:** RDE-5 generates RHOSO-specific AAP files only. ODE-5 generates the shared EE, credential types, OCP templates, and the merged `all-objects.yml`. See [agent-ocp-deployment-engineer.md](agent-ocp-deployment-engineer.md) for OCP AAP details.
-
-## RDE-4 Docker Reference — OpenShift-Safe Patterns (MUST follow)
-
-When generating `Dockerfile`, `docker/entrypoint.sh`, `bringup.sh`, the following patterns are **mandatory**. OpenShift runs containers as a random non-root UID (e.g. 1000890000) — these patterns prevent deployment failures.
-
-### Dockerfile Reference Pattern
-```dockerfile
-# Stage 1: Node frontend build
-FROM node:20-alpine AS frontend-build
-WORKDIR /build
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci 2>/dev/null || npm install
-ARG CACHEBUST=1
-COPY frontend/ ./
-RUN npm run build
-
-# Stage 2: Python + Nginx + Ansible runtime
-FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
-    CPAT_ROOT=/app CPAT_DATA_DIR=/cpat-data ANSIBLE_CONFIG=/app/ansible.cfg
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    nginx ansible-core openssh-client sshpass curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/* && rm -f /etc/nginx/sites-enabled/default
-WORKDIR /app
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY backend/ /app/
-COPY ansible/ /app/ansible/
-COPY ansible.cfg /app/ansible.cfg
-COPY --from=frontend-build /build/dist /app/static
-COPY frontend/nginx/default.conf /etc/nginx/conf.d/default.conf
-COPY docker/entrypoint.sh /entrypoint.sh
-# OpenShift: ALL runtime-writable dirs MUST be chmod 777
-RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh \
-    && mkdir -p /cpat-data /tmp/nginx_client_body /tmp/nginx_proxy \
-       /tmp/nginx_fastcgi /tmp/nginx_uwsgi /tmp/nginx_scgi \
-       /var/lib/nginx/body /var/log/nginx /run \
-    && chmod -R 777 /cpat-data /tmp /var/lib/nginx /var/log/nginx /run \
-       2>/dev/null || true
-EXPOSE 8080
-ENTRYPOINT ["/entrypoint.sh"]
-```
-
-**FORBIDDEN in Dockerfile:**
-- `EXPOSE 80` — use `EXPOSE 8080` (OpenShift blocks < 1024)
-- `COPY ... 2>/dev/null` — COPY does not support shell redirects
-- `USER root` at the end — leave unset or use non-root
-- Missing `chmod -R 777` on nginx/runtime dirs
-
-### entrypoint.sh Reference Pattern
-```sh
-#!/bin/sh
-set -e
-export CPAT_DATA_DIR="${CPAT_DATA_DIR:-/cpat-data}"
-# Create subdirs (NEVER chmod the mount root itself — OpenShift emptyDir rejects it)
-mkdir -p "$CPAT_DATA_DIR/uploads" "$CPAT_DATA_DIR/secrets" \
-         "$CPAT_DATA_DIR/logs/registrations" "$CPAT_DATA_DIR/logs/installations" \
-         "$CPAT_DATA_DIR/artifacts" \
-         /tmp/nginx_client_body /tmp/nginx_proxy /tmp/nginx_fastcgi \
-         /tmp/nginx_uwsgi /tmp/nginx_scgi /tmp/nginx_logs
-# Fix nginx paths for non-root
-sed -i 's|^pid .*|pid /tmp/nginx.pid;|' /etc/nginx/nginx.conf 2>/dev/null || true
-gunicorn --bind 127.0.0.1:5000 --workers 2 --timeout 7200 --chdir /app app:app &
-exec nginx -g 'daemon off;'
-```
-
-**FORBIDDEN in entrypoint.sh:**
-- `chmod 755 /cpat-data` or `chmod 777 "$CPAT_DATA_DIR"` under `set -e` — this kills the container on OpenShift emptyDir
-- `listen 80` in nginx — use `listen 8080`
-- Default nginx temp paths — always use `/tmp/nginx_*`
-
-### bringup.sh Reference Pattern
-- Port 8080 default (not 80) via `CPAT_PORT` env var
-- Support both `podman` and `docker` runtimes
-- Auto-version: `YY.M.W` from current date
-- Host-network mode support via `CPAT_NETWORK=host`
+> **Note:** RDE-5 adds RHOSO job templates and the RHOSO workflow to `import-via-api.sh`. ODE-5 owns the shared AAP objects (credential types, inventory, project, OCP templates) and the overall script structure. See [agent-ocp-deployment-engineer.md](agent-ocp-deployment-engineer.md) for OCP AAP details.
 
 When a `sub_stage` is specified, generate ONLY that layer's files. When no `sub_stage` is specified (direct user request), generate all layers sequentially.
 
@@ -418,7 +342,7 @@ When `Ceph External = yes` in CIQ, the following manifests are affected:
 - FRESH mode: Generate ALL files in the CPAT project blueprint (see template for complete inventory)
 - ENHANCE mode: Generate ONLY changed files; cite existing file paths for context
 - Every new Ansible task file MUST be placed in the correct functional subdirectory under `tasks/` (common, prerequisites, secrets, storage, network, control_plane, data_plane, post_deployment, or manifests)
-- Every new Ansible task file MUST be tagged with its subdirectory path in `ansible_runner.py` (e.g. `"storage/new_task"`) AND registered in frontend `RHOSO_DEPLOY_TASKS` AND added to AAP survey choices in `output/cpat/aap/exports/rhoso-job-templates.yml` + `rhoso-workflow-templates.yml` (maintained by RDE-5)
+- Every new Ansible task file MUST be tagged with its subdirectory path in `ansible_runner.py` (e.g. `"storage/new_task"`) AND registered in frontend `RHOSO_DEPLOY_TASKS` AND added to `import-via-api.sh` (create_rhoso_jt + attach_rhoso_survey + wire_workflow) AND `cleanup-via-api.sh` (RHOSO_JOB_TEMPLATES array)
 - All `include_tasks` paths within the role are relative to the role's `tasks/` directory — use `subdir/filename.yml` format (e.g. `common/_verify_required_crds.yml`)
 - Every new Jinja template MUST follow naming: `openstack_<resource>.yaml.j2`
 - Every new Flask route MUST use `/api/` prefix with `jsonify` responses

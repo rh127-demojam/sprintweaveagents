@@ -466,12 +466,28 @@ RDE_SUB_STAGES: list[dict] = [
             "You are the RHOSO Deployment Engineer agent. sub_stage=Ansible. "
             "Generate the complete Ansible layer: 25 task files in 9 subdirs, "
             "19 Jinja2 templates, ~170 defaults, library modules, module_utils "
-            "(v1.4 schema). Write all files to output/cpat/ansible/. Follow the "
-            "agent rule at .cursor/rules/agent-rhoso-deployment-engineer.md. "
-            "CRITICAL: Task files live in subdirectories — main.yml includes "
-            "'{{ installation_task }}.yml' so backend tags MUST be subdir/task "
-            "(e.g. 'network/network_preparation'). Schema file MUST be complete "
-            "Python — no truncation. If >500 lines, write in parts."
+            "(v1.4 schema). Follow .cursor/rules/agent-rhoso-deployment-engineer.md.\n"
+            "REQUIRED layout (do NOT invent another tree):\n"
+            "  output/cpat/ansible/playbooks/roles/rhoso/tasks/<subdir>/*.yml\n"
+            "  output/cpat/ansible/playbooks/roles/rhoso/templates/*.j2\n"
+            "  output/cpat/ansible/playbooks/roles/rhoso/defaults/main.yml\n"
+            "  output/cpat/ansible/playbooks/roles/rhoso/tasks/main.yml\n"
+            "  output/cpat/ansible/playbooks/main.yml\n"
+            "  output/cpat/ansible/library/\n"
+            "  output/cpat/ansible/module_utils/rhoso_ciq_schema.py\n"
+            "  output/cpat/ansible.cfg\n"
+            "FORBIDDEN paths (never write these):\n"
+            "  output/cpat/ansible/tasks/   (flat tasks — WRONG)\n"
+            "  output/cpat/ansible/templates/  (flat templates — WRONG)\n"
+            "  output/cpat/ansible/defaults/   (flat defaults — WRONG)\n"
+            "If those wrong paths already exist, ignore them — only create/update "
+            "files under playbooks/roles/rhoso/ + library/ + module_utils/.\n"
+            "CRITICAL: Task files live in role subdirs — main.yml includes "
+            "'{{ installation_task }}.yml' so tags MUST be subdir/task "
+            "(e.g. 'network/network_preparation'). Schema MUST be complete "
+            "Python — no truncation. If >500 lines, write in parts. "
+            "Do NOT regenerate files you already wrote correctly under "
+            "playbooks/roles/rhoso/ — move on to missing files only."
         ),
         "verify_paths": [
             "output/cpat/ansible/playbooks/roles/rhoso/tasks/main.yml",
@@ -573,21 +589,28 @@ RDE_SUB_STAGES: list[dict] = [
         "abbrev": "RDE-5",
         "prompt": (
             "You are the RHOSO Deployment Engineer agent. sub_stage=AAP. "
-            "Generate RHOSO-specific AAP 2.5 exports:\n"
-            "1. output/cpat/aap/exports/rhoso-job-templates.yml — "
-            "CPAT RHOSO Install JT (main.yml --tags rhoso, survey with 19 "
-            "installation_task choices from RHOSO_INSTALLATION_TASK_TAGS) + "
-            "CPAT RHOSO Register JT (main.yml --tags register).\n"
-            "2. output/cpat/aap/exports/rhoso-workflow-templates.yml — "
-            "CPAT RHOSO Full Install WT (19 nodes chaining the Install JT "
-            "with different extra_data per task).\n"
-            "Read RHOSO_INSTALLATION_TASK_TAGS from output/cpat/backend/ansible_runner.py "
-            "to build the survey choices and workflow nodes. Follow the agent rule "
-            "at .cursor/rules/agent-rhoso-deployment-engineer.md."
+            "Generate / update AAP 2.5 REST API scripts (NOT YAML exports, NOT a custom EE):\n"
+            "1. output/cpat/aap/import-via-api.sh — add the RHOSO section: "
+            "20 individual RHOSO job templates (19 tasks + 1 Register) with the task "
+            "pre-set in extra_vars from RHOSO_INSTALLATION_TASK_TAGS, surveys for CIQ "
+            "path, and RHOSO Full Install workflow with 19 on-success wired nodes. "
+            "Use create_rhoso_jt + attach_rhoso_survey + wire_workflow helpers. "
+            "If the file already exists (from ODE-5), MERGE the RHOSO section — do not "
+            "remove OCP/shared objects. If it does not exist yet, create the script "
+            "with RHOSO JTs/workflow (and minimal shared scaffolding if needed).\n"
+            "2. output/cpat/aap/cleanup-via-api.sh — RHOSO_JOB_TEMPLATES array + RHOSO "
+            "workflow cleanup (merge if file exists).\n"
+            "3. output/cpat/aap/README.md — document import/cleanup usage for RHOSO "
+            "(merge with existing README if present).\n"
+            "Resource names MUST NOT use a 'CPAT' prefix (e.g. 'RHOSO Generate Manifests', "
+            "'RHOSO Full Install'). "
+            "Read RHOSO_INSTALLATION_TASK_TAGS from output/cpat/backend/ansible_runner.py. "
+            "Follow .cursor/rules/agent-rhoso-deployment-engineer.md."
         ),
         "verify_paths": [
-            "output/cpat/aap/exports/rhoso-job-templates.yml",
-            "output/cpat/aap/exports/rhoso-workflow-templates.yml",
+            "output/cpat/aap/import-via-api.sh",
+            "output/cpat/aap/cleanup-via-api.sh",
+            "output/cpat/aap/README.md",
         ],
     },
 ]
@@ -676,27 +699,29 @@ ODE_SUB_STAGES: list[dict] = [
         "abbrev": "ODE-5",
         "prompt": (
             "You are the OCP Deployment Engineer agent. sub_stage=AAP. "
-            "Generate AAP 2.5 deliverables:\n"
-            "1. output/cpat/aap/execution-environment/ — execution-environment.yml "
-            "(ansible-builder v3, ee-minimal-rhel9), requirements.yml, "
-            "requirements.txt (openpyxl), bindep.txt.\n"
-            "2. output/cpat/aap/exports/credential-types.yml — 3 custom types: "
-            "Bastion SSH, BMC, Pull Secret.\n"
-            "3. output/cpat/aap/exports/ocp-job-templates.yml — CPAT OCP Install "
-            "(26 task survey from OCP_INSTALLATION_TASK_TAGS) + CPAT OCP Validate.\n"
-            "4. output/cpat/aap/exports/ocp-workflow-templates.yml — 3 WTs: "
-            "ABI Full (11 nodes), ABI-DC Full (14 nodes), Destroy (1 node).\n"
-            "5. output/cpat/aap/exports/all-objects.yml — unified import merging "
-            "OCP + RHOSO templates.\n"
-            "6. output/cpat/aap/README.md — EE build + AAP setup guide.\n"
+            "Generate / update AAP 2.5 REST API scripts (NOT YAML exports, NOT a custom EE). "
+            "No execution-environment/ — binaries run on the bastion via delegate_to.\n"
+            "1. output/cpat/aap/import-via-api.sh — single bash script (curl + python3) that "
+            "creates ALL AAP objects via REST API. Auto-detect AAP Gateway "
+            "(/api/controller/v2/) vs standalone (/api/v2/). Include: "
+            "3 credential types (Bastion SSH, BMC Credentials, Pull Secret — no 'CPAT' "
+            "prefix), inventory, project, 27 individual OCP job templates (26 tasks + "
+            "Validate) with task pre-set in extra_vars from OCP_INSTALLATION_TASK_TAGS, "
+            "surveys (CIQ path, cluster name, OCP version), and 3 OCP workflows with "
+            "on-success wired nodes (ABI Full, ABI-DC Full, Destroy). "
+            "If the file already exists (from RDE-5), MERGE OCP/shared sections — do not "
+            "remove RHOSO objects.\n"
+            "2. output/cpat/aap/cleanup-via-api.sh — REST cleanup (dry-run by default) "
+            "with OCP_JOB_TEMPLATES array (merge if file exists).\n"
+            "3. output/cpat/aap/README.md — AAP URL discovery, SCM credential, "
+            "import/cleanup, credential instances, CIQ handling, usage.\n"
+            "Resource names MUST NOT use a 'CPAT' prefix. "
             "Read OCP_INSTALLATION_TASK_TAGS from output/cpat/backend/ansible_runner.py. "
             "Follow .cursor/rules/agent-ocp-deployment-engineer.md."
         ),
         "verify_paths": [
-            "output/cpat/aap/execution-environment/execution-environment.yml",
-            "output/cpat/aap/exports/ocp-job-templates.yml",
-            "output/cpat/aap/exports/ocp-workflow-templates.yml",
-            "output/cpat/aap/exports/all-objects.yml",
+            "output/cpat/aap/import-via-api.sh",
+            "output/cpat/aap/cleanup-via-api.sh",
             "output/cpat/aap/README.md",
         ],
     },
