@@ -1,6 +1,6 @@
 # SprintWeave Agents
 
-**SprintWeave** is an OpenShift-hosted AI delivery platform that turns uploaded customer docs (PDF / DOCX / TXT) into Telco Cloud artifacts — CIQ workbooks, Ansible/AAP content, backend/frontend/Docker trees — using multi-agent LLM pipelines (tool-loop / LangGraph) over MaaS.
+**SprintWeave** is an OpenShift-hosted AI delivery platform that turns uploaded customer docs (PDF / DOCX / TXT) into Telco Cloud artifacts — **CIQ** (Customer Information Questionnaire) workbooks, **Ansible / AAP** (Ansible Automation Platform) content, backend/frontend/Docker trees — using multi-agent **LLM** (Large Language Model) pipelines (tool-loop / LangGraph) over **MaaS** (Model as a Service).
 
 > **Do not** put API keys in Git, slides, ConfigMaps, or this file. Use the `sprintweave-llm` Secret only.
 
@@ -86,15 +86,55 @@ sprintweave-rhoso / sprintweave   (Dockerfile.bundle) — rebuild often
 
 ### Pipeline stages (RHOSO)
 
-| Stage | Agent | Typical mode | Produces |
-|-------|-------|--------------|----------|
-| RDA | RHOSO DA | Single-shot | CIQ schema, generator, `.xlsx`, reports |
-| RDE-1 Ansible | RHOSO DE | Tool-loop / LangGraph | `output/cpat/ansible/` |
-| RDE-2 Backend | RHOSO DE | Single-shot / LangGraph | `output/cpat/backend/` |
-| RDE-3 Frontend | RHOSO DE | Single-shot / LangGraph | `output/cpat/frontend/` |
-| RDE-4 Docker | RHOSO DE | Single-shot / LangGraph | Dockerfile, bringup, USAGE |
-| RDE-5 AAP | RHOSO DE | Single-shot | AAP exports |
-| Gates | Human | Approve / reject / skip | Continue or stop |
+**RHOSO** = Red Hat OpenStack Services on OpenShift.
+
+| Stage | Full name | Agent | Typical mode | Produces |
+|-------|-----------|-------|--------------|----------|
+| **RDA** | RHOSO Design Authority | RHOSO DA | Single-shot | CIQ schema, workbook generator, Excel workbooks, reports |
+| **RDA-1** | RDA — Schema | RHOSO DA | Single-shot | CIQ parameter schema (Python) |
+| **RDA-2** | RDA — Generator | RHOSO DA | Single-shot | Workbook generator scripts |
+| **RDA-3** | RDA — Workbooks | RHOSO DA | Single-shot | CIQ Excel (`.xlsx`) workbooks |
+| **RDE** | RHOSO Deployment Engineer | RHOSO DE | Multi sub-stage | Full CPAT delivery tree |
+| **RDE-1** | RDE — Ansible | RHOSO DE | Tool-loop / LangGraph | `output/cpat/ansible/` (roles, templates, playbooks) |
+| **RDE-2** | RDE — Backend | RHOSO DE | Single-shot / LangGraph | `output/cpat/backend/` (Flask API) |
+| **RDE-3** | RDE — Frontend | RHOSO DE | Single-shot / LangGraph | `output/cpat/frontend/` (React UI) |
+| **RDE-4** | RDE — Docker | RHOSO DE | Single-shot / LangGraph | Dockerfile, bringup, USAGE |
+| **RDE-5** | RDE — AAP | RHOSO DE | Single-shot | AAP exports (EE, credentials, job templates) |
+| Gates | Human approval | — | Approve / reject / skip | Continue or stop |
+
+**OCP** (OpenShift Container Platform) pipelines use the same pattern with **ODA** (OCP Design Authority) and **ODE** (OCP Deployment Engineer).
+
+---
+
+## Glossary
+
+| Abbreviation | Full form | Meaning in SprintWeave |
+|--------------|-----------|------------------------|
+| **RHOSO** | Red Hat OpenStack Services on OpenShift | OpenStack control plane / services running on OpenShift |
+| **OCP** | OpenShift Container Platform | Red Hat’s Kubernetes platform |
+| **OCP-V** | OpenShift Virtualization | VMs on OpenShift (related training context) |
+| **DA** | Design Authority | Agent that reads docs and designs CIQ schema / workbooks |
+| **DE** | Deployment Engineer | Agent that generates deployable code (Ansible, app, Docker, AAP) |
+| **RDA** | RHOSO Design Authority | DA stage(s) for RHOSO delivery |
+| **RDE** | RHOSO Deployment Engineer | DE stage(s) for RHOSO delivery |
+| **ODA** | OCP Design Authority | DA stage(s) for OCP delivery |
+| **ODE** | OCP Deployment Engineer | DE stage(s) for OCP delivery |
+| **CIQ** | Customer Information Questionnaire | Parameter workbook / schema customers fill for deployment |
+| **MoP / MOP** | Method of Procedure | Step-by-step operational / upgrade procedure document |
+| **CPAT** | CPAT delivery container tree | Generated install/delivery project (`output/cpat/…`) |
+| **AAP** | Ansible Automation Platform | Red Hat automation controller / EE / job templates |
+| **EE** | Execution Environment | Container image that runs Ansible jobs in AAP |
+| **JT** | Job Template | AAP job definition that runs a playbook |
+| **LLM** | Large Language Model | Model used for generation (via MaaS) |
+| **MaaS** | Model as a Service | Enterprise OpenAI-compatible LLM endpoint |
+| **Docling** | Docling (IBM/open-source) | Parses PDF/DOCX into markdown for agents |
+| **LangGraph** | LangGraph | Graph-based agent workflow runtime (staged tool loops) |
+| **PVC** | Persistent Volume Claim | OpenShift storage for jobs / inputs / custom agents |
+| **RWO** | ReadWriteOnce | PVC access mode — why API stays at 1 replica |
+| **SCC** | Security Context Constraints | OpenShift pod security policy |
+| **Quay** | Quay.io | Container image registry |
+| **UI** | User Interface | Streamlit SprintWeave front end |
+| **API** | Application Programming Interface | FastAPI + worker backend |
 
 ---
 
